@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.16 - Library Fix (fetch) 🛠️"
+BOT_VERSION = "v3.18 - 2026 Model Update 🚀"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -74,14 +74,15 @@ DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
-# --- API & QUOTA CONFIG ---
+# --- API & QUOTA CONFIG (UPDATED FOR 2026) ---
 exhausted_tracker = {} 
-MODEL_CHAIN = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']
+# Updated model names to resolve 404 errors
+MODEL_CHAIN = ['gemini-2.0-pro', 'gemini-2.0-flash', 'gemini-3-flash']
 
 DAILY_LIMITS = {
-    'gemini-1.5-pro': 5,
-    'gemini-1.5-flash': 50,
-    'gemini-1.5-flash-8b': 100
+    'gemini-2.0-pro': 5,
+    'gemini-2.0-flash': 50,
+    'gemini-3-flash': 100
 }
 
 def configure_genai(key_index):
@@ -264,7 +265,7 @@ async def tldw(ctx):
         await ctx.message.add_reaction("⏳")
         async with ctx.typing():
             try:
-                # NEW v3.16 FIX: Instantiate class first, then use fetch()
+                # NEW v3.16-style class instantiation
                 api = YouTubeTranscriptApi()
                 transcript_data = api.fetch(video_id, languages=['en', 'en-GB']).to_raw_data()
                 full_text = " ".join([i['text'] for i in transcript_data])
@@ -273,8 +274,7 @@ async def tldw(ctx):
                 return await ctx.send(f"❌ Could not fetch transcript: {e}")
             
             prompt = f"Summarize video transcript in one paragraph.\n\nTRANSCRIPT:\n{full_text[:50000]}"
-            flash_chain = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro']
-            await process_ai_request(ctx, prompt, "Video Summary (TL;DW)", update_stats=False, custom_chain=flash_chain)
+            await process_ai_request(ctx, prompt, "Video Summary (TL;DW)", update_stats=False)
     except Exception as e:
         log_info(f"TLDW Error: {e}")
         await ctx.send("⚠️ Error processing video.")
@@ -295,6 +295,8 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False, cust
         response, used_model = None, ""
         now = datetime.now()
         chain = custom_chain if custom_chain else MODEL_CHAIN
+        last_error = "No keys found"
+        
         for model_name in chain:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i in range(len(ALL_KEYS)):
@@ -304,17 +306,24 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False, cust
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
+                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
-                    data[today][model_name] += 1
+                    data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
                 except exceptions.ResourceExhausted:
+                    last_error = f"429 Quota Exceeded on {model_name}"
                     exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
-                except Exception as e: log_info(f"Error: {e}")
+                except Exception as e:
+                    last_error = str(e)
+                    log_info(f"Error on {model_name} with key {i}: {e}")
             if response: break
-        if not response: return await ctx.send("🔄 Quotas Exhausted.")
+        
+        if not response: 
+            return await ctx.send(f"🔄 **All models failed.**\n> Last recorded error: `{last_error}`")
+        
         await ctx.send(f"### {title_prefix} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
         if update_stats:
