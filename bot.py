@@ -139,7 +139,7 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    # FIX: Join outside the f-string for Python 3.11
+    # Move join outside f-string for Py 3.11 compatibility
     full_transcript = "\n".join(transcript)
     prompt = f"""
     Summarize this Discord transcript grouped by user.
@@ -161,7 +161,7 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    # FIX: Join outside the f-string for Python 3.11
+    # Move join outside f-string for Py 3.11 compatibility
     full_transcript = "\n".join(transcript)
     prompt = f"""
     Analyze the following Discord transcript for arguments or disagreements.
