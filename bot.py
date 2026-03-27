@@ -8,7 +8,27 @@ import asyncio
 import functools
 import sys
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
+
+# --- LOGGING SETUP (Log Rotation) ---
+log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+log_file = 'bot_terminal.log'
+
+# 5MB per file, keeps 5 old backups
+my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, 
+                                 backupCount=5, encoding=None, delay=0)
+my_handler.setFormatter(log_formatter)
+my_handler.setLevel(logging.INFO)
+
+app_log = logging.getLogger('root')
+app_log.setLevel(logging.INFO)
+app_log.addHandler(my_handler)
+
+def log_info(msg):
+    print(msg) # Still prints to Docker logs
+    app_log.info(msg)
 
 # --- FILE LOADER HELPERS ---
 def load_file(filename):
@@ -16,7 +36,7 @@ def load_file(filename):
         with open(filename, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        print(f"CRITICAL: {filename} not found!")
+        log_info(f"CRITICAL: {filename} not found!")
         return []
 
 token_list = load_file("discordtoken.txt")
@@ -43,18 +63,20 @@ MODEL_CHAIN = [
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
-# help_command=None remains so we can use our custom pretty version
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+# Explicitly remove the default help to ensure ours works
+bot = commands.Bot(command_prefix="!", intents=intents)
+bot.remove_command('help')
 
 @bot.event
 async def on_ready():
-    print(f"--- {bot.user.name} ONLINE ---")
+    log_info(f"--- {bot.user.name} ONLINE ---")
     if ADMIN_IDS:
         try:
             admin = await bot.fetch_user(ADMIN_IDS[0])
             await admin.send(f"✅ **System Online:** Bot has restarted and is running the latest version from GitHub.")
         except Exception as e:
-            print(f"Could not send boot notification to admin: {e}")
+            log_info(f"Could not send boot notification: {e}")
 
 # --- COMMANDS ---
 
@@ -69,19 +91,13 @@ async def help_command(ctx):
         "  `!tldr 30min` (Last 30 minutes)\n"
         "  `!tldr 2hr` (Last 2 hours)\n\n"
         "* **!keystatus**\n"
-        "  Check the health and quota of the AI API keys.\n\n"
+        "  Check the health of the AI API keys.\n\n"
         "* **!help**\n"
-        "  Shows this message."
+        "  Shows this message.\n\n"
+        "**👑 Admin Only**\n"
+        "* **!update**\n"
+        "  Pulls latest code from GitHub and restarts the bot."
     )
-    
-    # Add Admin-only commands to the list if the user is an admin
-    if ctx.author.id in ADMIN_IDS:
-        help_text += (
-            "\n\n**👑 Admin Commands**\n"
-            "* **!update**\n"
-            "  Pulls the latest code from GitHub and restarts the bot."
-        )
-    
     await ctx.send(help_text)
 
 @bot.command(name="update")
@@ -89,6 +105,7 @@ async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.** Admin ID not recognized.")
     await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting container...")
+    log_info(f"Update initiated by {ctx.author.display_name}. Exiting...")
     sys.exit(0)
 
 @bot.command(name="keystatus")
@@ -118,7 +135,6 @@ async def tldr(ctx, *, args: str = "50"):
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
     try:
-        # 1. Fetching History
         if is_time_mode:
             delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
             summary_info = f"the last {value} {'mins' if 'min' in raw_input else 'hours'}"
@@ -140,7 +156,6 @@ async def tldr(ctx, *, args: str = "50"):
 
         prompt = f"""
         Summarize this Discord transcript grouped by user.
-        
         STRICT FORMATTING RULES:
         1. Start each user section with the name underlined like this: __Nickname__
         2. DO NOT put spaces between the underscores and the name.
@@ -152,7 +167,6 @@ async def tldr(ctx, *, args: str = "50"):
         {full_transcript}
         """
 
-        # 2. KEY-PRIORITY LOGIC
         async with ctx.typing():
             response = None
             used_model = ""
@@ -181,7 +195,6 @@ async def tldr(ctx, *, args: str = "50"):
                 await ctx.send("🔄 Quotas hit. Resetting tracker and retrying once...")
                 return await tldr(ctx, args=args)
 
-            # 3. Output logic
             header = f"### Summary for {ctx.author.mention}\n> **Context:** {summary_info} | **Model:** {used_model} | **Key:** #{used_key_num}"
             await ctx.send(header)
             
@@ -199,10 +212,10 @@ async def tldr(ctx, *, args: str = "50"):
                         await ctx.send(content)
                     
     except Exception as e:
-        print(f"ERROR: {traceback.format_exc()}")
+        log_info(f"ERROR: {traceback.format_exc()}")
         await ctx.send(f"❌ Summary failed.")
 
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
 else:
-    print("CRITICAL: No token found in discordtoken.txt")
+    log_info("CRITICAL: No token found in discordtoken.txt")
