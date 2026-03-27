@@ -22,15 +22,16 @@ MODEL_CHAIN = [
     'gemini-3.1-flash-lite-preview'
 ]
 
-# --- BOT SETUP ---
+# --- BOT SETUP (FIXED INTENTS) ---
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True  # <--- CRITICAL: This allows the bot to see Nicknames/Members
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
     print(f"--- {bot.user.name} ONLINE ---")
-    print(f"Primary Model: {MODEL_CHAIN[0]}")
+    print(f"Privileged Intents: Members={intents.members}")
     print(f"--------------------------")
 
 @bot.command(name="tldr")
@@ -50,13 +51,12 @@ async def tldr(ctx, *, args: str = "50"):
             summary_info = f"the last {value} {'mins' if 'min' in raw_input else 'hours'}"
             async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
                 if msg.author.bot or msg.id == ctx.message.id: continue
-                # FIX: Uses display_name (Server Nickname)
+                # msg.author.display_name works ONLY if intents.members is True
                 transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}")
         else:
             summary_info = f"the last {value} messages"
             async for msg in ctx.channel.history(limit=value + 10):
                 if msg.author.bot or msg.id == ctx.message.id: continue
-                # FIX: Uses display_name (Server Nickname)
                 transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}")
                 if len(transcript_list) >= value: break
             transcript_list.reverse()
@@ -79,7 +79,7 @@ async def tldr(ctx, *, args: str = "50"):
                     break 
                 except (exceptions.ResourceExhausted, exceptions.NotFound) as e:
                     reason = "Quota" if isinstance(e, exceptions.ResourceExhausted) else "404 Not Found"
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {model_name} failed ({reason}). Trying next...")
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {model_name} failed ({reason})")
                     continue 
                 except Exception as e:
                     raise e
@@ -87,26 +87,25 @@ async def tldr(ctx, *, args: str = "50"):
             if not response:
                 raise Exception("All models in the chain were unavailable.")
 
-            # 3. Final Output
+            # 3. Final Output (FIXED HEADER & MENTION)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Model: {used_model}")
             
-            # FIX: Mentions the requesting user and identifies the model
-            header = f"### Summary of {summary_info} for {ctx.author.mention}\n*(Generated via {used_model})*"
+            # Using the Mention attribute triggers the ping notification
+            header = f"### Summary for {ctx.author.mention}\n> **Context:** {summary_info} | **Model:** {used_model}"
             await ctx.send(header)
             
+            # Sending text with split support in case summary is huge
             summary_text = response.text
-            if len(summary_text) > 1950:
-                summary_text = summary_text[:1950] + "..."
-            
-            await ctx.send(summary_text)
+            if len(summary_text) > 1900:
+                # Simple split if it's too long for Discord's 2000 char limit
+                parts = [summary_text[i:i+1900] for i in range(0, len(summary_text), 1900)]
+                for p in parts:
+                    await ctx.send(p)
+            else:
+                await ctx.send(summary_text)
                     
     except Exception as e:
         print(f"CRITICAL ERROR: {traceback.format_exc()}")
-        await ctx.send(f"❌ **Summary failed.** I encountered an error or all models are exhausted.")
-
-@tldr.error
-async def tldr_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Wait {math.ceil(error.retry_after)}s.", delete_after=5)
+        await ctx.send(f"❌ **Summary failed.** Check server logs for details.")
 
 bot.run(TOKEN)
