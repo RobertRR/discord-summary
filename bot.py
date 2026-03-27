@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} | Prometheus Update: {datetime.now().strftime('%H:%M:%S')}")
+    print(f"Logged in as {bot.user} | Sync Time: {datetime.now().strftime('%H:%M:%S')}")
 
 @bot.command(name="tldr")
 async def tldr(ctx, *, args: str = "50"):
@@ -54,33 +54,6 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # 2. Strict Formatting Prompt
+        # 2. Preparation
         full_transcript_text = "\n".join(transcript_list)
-        prompt = f"""
-        Summarize this Discord transcript. Group by user.
-        
-        OUTPUT FORMAT EXAMPLE (FOLLOW THIS EXACTLY):
-        __Display Name [username]__
-        * Point one about what they said
-        * Point two about their request
-        ---SPLIT---
-
-        STRICT RULES:
-        1. Use ONLY double underscores (__) for the header.
-        2. DO NOT use any bold (**). Strip all bolding.
-        3. Use a single asterisk (*) for bullet points.
-        4. NO PARAGRAPHS. Only bullet points.
-        5. Separate each person's block with '---SPLIT---'.
-
-        TRANSCRIPT:
-        {full_transcript_text}
-        """
-
-        async with ctx.typing():
-            response = model.generate_content(prompt)
-            
-            if not response.text:
-                raise ValueError("Gemini returned an empty response.")
-
-            # Scrub all bolding programmatically
-            clean_text = response
+        prompt =
