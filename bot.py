@@ -32,7 +32,7 @@ def load_file(filename):
         with open(filename, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        log_info(f"CRITICAL: {filename} not found!")
+        log_info("CRITICAL: File not found!")
         return []
 
 token_list = load_file("discordtoken.txt")
@@ -59,13 +59,13 @@ bot.remove_command('help')
 
 @bot.event
 async def on_ready():
-    log_info(f"--- {bot.user.name} ONLINE ---")
+    log_info("--- ONLINE ---")
     if ADMIN_IDS:
         try:
             admin = await bot.fetch_user(ADMIN_IDS[0])
-            await admin.send(f"✅ **System Online:** Bot has restarted and is running the latest version from GitHub.")
+            await admin.send("✅ **System Online:** Bot has restarted and is running the latest version from GitHub.")
         except Exception as e:
-            log_info(f"Could not send boot notification: {e}")
+            log_info("Could not send boot notification.")
 
 # --- COMMANDS ---
 
@@ -92,18 +92,17 @@ async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.**")
     await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting...")
-    log_info(f"Update initiated by {ctx.author.display_name}. Exiting...")
     sys.exit(0)
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
     if not exhausted_tracker:
-        await ctx.send(f"✅ All {len(ALL_KEYS)} keys are fresh.")
+        await ctx.send("✅ All keys are fresh.")
         return
     msg = "### 🔑 API Key Status\n"
     for model in MODEL_CHAIN:
         dead = len(exhausted_tracker.get(model, []))
-        msg += f"* **{model}:** {len(ALL_KEYS)-dead}/{len(ALL_KEYS)} Keys Available\n"
+        msg += "* **{}:** {}/{} Keys Available\n".format(model, len(ALL_KEYS)-dead, len(ALL_KEYS))
     await ctx.send(msg)
 
 # --- CORE LOGIC ---
@@ -123,11 +122,11 @@ async def fetch_history(ctx, args):
         delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
         async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
-            transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}")
+            transcript_list.append("USER: {} | MSG: {}".format(msg.author.display_name, msg.content))
     else:
         async for msg in ctx.channel.history(limit=value + 10):
             if msg.author.bot or msg.id == ctx.message.id: continue
-            transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}")
+            transcript_list.append("USER: {} | MSG: {}".format(msg.author.display_name, msg.content))
             if len(transcript_list) >= value: break
         transcript_list.reverse()
     
@@ -140,7 +139,6 @@ async def tldr(ctx, *, args: str = "50"):
     if not transcript: return await ctx.send("No messages found.")
 
     full_transcript = "\n".join(transcript)
-    # Using .format() to avoid the f-string backslash error in Py 3.11
     prompt = """
     Summarize this Discord transcript grouped by user.
     STRICT FORMATTING RULES:
@@ -162,7 +160,6 @@ async def arguments(ctx, *, args: str = "50"):
     if not transcript: return await ctx.send("No messages found.")
 
     full_transcript = "\n".join(transcript)
-    # Using .format() to avoid the f-string backslash error in Py 3.11
     prompt = """
     Analyze the following Discord transcript for arguments or disagreements.
     
@@ -223,5 +220,3 @@ async def process_ai_request(ctx, prompt, title_prefix):
 
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
-else:
-    log_info("CRITICAL: No token found in discordtoken.txt")
