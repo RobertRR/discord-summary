@@ -73,9 +73,9 @@ async def on_ready():
 async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
-        "* **!tldr [val]**\n"
+        "* **!tldr [amount]**\n"
         "  Summarizes recent activity. Examples: `!tldr 50`, `!tldr 1hr`.\n\n"
-        "* **!arguments [val]**\n"
+        "* **!arguments [amount]**\n"
         "  Analyzes conflicts, creates a stance table, and provides a verdict.\n\n"
         "* **!keystatus**\n"
         "  Check the health and quota of the AI API keys.\n\n"
@@ -139,7 +139,7 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    # FIX: Join outside the f-string
+    # FIX: Join outside the f-string for Python 3.11
     full_transcript = "\n".join(transcript)
     prompt = f"""
     Summarize this Discord transcript grouped by user.
@@ -161,7 +161,7 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    # FIX: Join outside the f-string
+    # FIX: Join outside the f-string for Python 3.11
     full_transcript = "\n".join(transcript)
     prompt = f"""
     Analyze the following Discord transcript for arguments or disagreements.
