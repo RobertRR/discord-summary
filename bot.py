@@ -21,18 +21,17 @@ async def on_ready():
 
 @bot.command(name="tldr")
 async def tldr(ctx, *, args: str = "50"):
-    # 1. ROBUST PARSING: Scan the raw input string
     raw_input = args.lower()
     
-    # Extract the first number found in the string
+    # 1. Extract the first number found in the string
     numbers = re.findall(r'\d+', raw_input)
     value = int(numbers[0]) if numbers else 50
     
     transcript_list = []
     header_text = ""
     
-    # 2. TRIGGER TIME LOGIC: If 'min' or 'hour' exists anywhere in the input
-    if "min" in raw_input or "hour" in raw_input or "hr" in raw_input:
+    # 2. DETERMINISTIC PARSING: If 'min' or 'hour' exists anywhere, use Time Logic
+    if any(keyword in raw_input for keyword in ["min", "mins", "hour", "hours", "hr"]):
         if "min" in raw_input:
             delta = timedelta(minutes=value)
             display_unit = "minutes"
@@ -58,7 +57,7 @@ async def tldr(ctx, *, args: str = "50"):
     if not transcript_list:
         return await ctx.send(f"No messages found for {header_text.split('as requested')[0].strip()}.")
 
-    # 3. POST THE HEADER
+    # 3. POST THE HEADER FIRST
     await ctx.send(header_text)
 
     # 4. GEMINI PROCESSING
@@ -84,10 +83,3 @@ async def tldr(ctx, *, args: str = "50"):
             clean_text = response.text.replace("**", "")
             
             for section in clean_text.split('---SPLIT---'):
-                if section.strip():
-                    await ctx.send(section.strip())
-    except Exception as e:
-        print(f"Error: {e}")
-        await ctx.send("❌ Summary failed. Check logs.")
-
-bot.run(TOKEN)
