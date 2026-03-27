@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.15 - The Absolute Build 🛠️"
+BOT_VERSION = "v3.16 - Library Fix (fetch) 🛠️"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -264,8 +264,9 @@ async def tldw(ctx):
         await ctx.message.add_reaction("⏳")
         async with ctx.typing():
             try:
-                # Proper method for youtube_transcript_api v3.15
-                transcript_data = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-GB'])
+                # NEW v3.16 FIX: Instantiate class first, then use fetch()
+                api = YouTubeTranscriptApi()
+                transcript_data = api.fetch(video_id, languages=['en', 'en-GB']).to_raw_data()
                 full_text = " ".join([i['text'] for i in transcript_data])
             except Exception as e:
                 log_info(f"Transcript fetch failed: {e}")
