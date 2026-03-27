@@ -6,16 +6,18 @@ services:
     volumes:
       - /projects/discord-summary:/app
     working_dir: /app
-    # The healthcheck now ensures the python process is actually active
+    # The healthcheck ensures the python process is actually active
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f python || exit 1"]
+      test:
+        - CMD-SHELL
+        - pgrep -f python || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
     command: >
       sh -c "apt-get update && apt-get install -y curl procps && 
              rm -f bot.py && 
-             curl -sSL https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py -o bot.py && 
+             curl -H 'Cache-Control: no-cache' -sSL https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py -o bot.py && 
              pip install discord.py google-generativeai && 
              python bot.py"
 networks: {}
