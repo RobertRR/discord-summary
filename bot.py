@@ -122,11 +122,13 @@ async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
         "* **!tldr [amount]**\n"
-        "  Summarizes activity with jump-links to messages.\n\n"
+        "  Summarizes activity with jump-links.\n\n"
         "* **!arguments [amount]**\n"
-        "  Analyzes conflicts, settles verdicts, and updates the Moggboard.\n\n"
+        "  Analyzes conflicts and updates the Moggboard.\n\n"
         "* **!moggboard**\n"
-        "  View the server's competitive power rankings.\n\n"
+        "  View the server's dominance hierarchy.\n\n"
+        "* **!clearmogs**\n"
+        "  **(Admin)** Resets all Moggboard statistics.\n\n"
         "* **!keystatus**\n"
         "  Check AI API key health.\n\n"
         "* **!update**\n"
@@ -140,7 +142,6 @@ async def moggboard(ctx):
     if not data:
         return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
 
-    # Sorting: Primary = Ratio, Secondary = Wins
     sorted_users = sorted(
         data.items(), 
         key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), 
@@ -158,7 +159,6 @@ async def moggboard(ctx):
         rank_class = get_rank_class(ratio)
         ratio_pct = "{:.1f}%".format(ratio * 100)
         
-        # Adding medals for top 3
         medal = ""
         if i == 1: medal = "🥇"
         elif i == 2: medal = "🥈"
@@ -168,6 +168,15 @@ async def moggboard(ctx):
         msg += "> **Class:** `{}` | **Ratio:** `{}` | **Stats:** `{}W - {}L`\n\n".format(rank_class, ratio_pct, w, l)
 
     await ctx.send(msg)
+
+@bot.command(name="clearmogs")
+async def clearmogs(ctx):
+    if ctx.author.id not in ADMIN_IDS:
+        return await ctx.send("⛔ **Access Denied.** Admins only.")
+    
+    save_mogg_data({})
+    log_info("Moggboard reset by {}".format(ctx.author.display_name))
+    await ctx.send("🗑️ **Moggboard Reset.** All stats have been wiped.")
 
 @bot.command(name="update")
 async def update(ctx):
@@ -259,7 +268,7 @@ async def arguments(ctx, *, args: str = "50"):
 
     RULES:
     - Use '---SPLIT---' to separate these 4 sections.
-    - If no argument exists, say 'The vibes are currently immaculate'.
+    - If no argument exists, say 'Everybody is too busy working hard (lmao).'.
     
     TRANSCRIPT:
     {}
