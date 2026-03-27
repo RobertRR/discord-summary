@@ -139,9 +139,9 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    # Move join outside f-string for Py 3.11 compatibility
     full_transcript = "\n".join(transcript)
-    prompt = f"""
+    # Using .format() to avoid the f-string backslash error in Py 3.11
+    prompt = """
     Summarize this Discord transcript grouped by user.
     STRICT FORMATTING RULES:
     1. Start each user section with the name underlined like this: __Nickname__
@@ -151,8 +151,8 @@ async def tldr(ctx, *, args: str = "50"):
     5. Use '---SPLIT---' between different users.
     
     TRANSCRIPT:
-    {full_transcript}
-    """
+    {}
+    """.format(full_transcript)
     await process_ai_request(ctx, prompt, "Summary")
 
 @bot.command(name="arguments")
@@ -161,9 +161,9 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    # Move join outside f-string for Py 3.11 compatibility
     full_transcript = "\n".join(transcript)
-    prompt = f"""
+    # Using .format() to avoid the f-string backslash error in Py 3.11
+    prompt = """
     Analyze the following Discord transcript for arguments or disagreements.
     
     1. Create a Markdown Table summarizing each argument:
@@ -176,8 +176,8 @@ async def arguments(ctx, *, args: str = "50"):
     Use '---SPLIT---' to separate logical sections.
     
     TRANSCRIPT:
-    {full_transcript}
-    """
+    {}
+    """.format(full_transcript)
     await process_ai_request(ctx, prompt, "Argument Analysis")
 
 async def process_ai_request(ctx, prompt, title_prefix):
@@ -206,7 +206,9 @@ async def process_ai_request(ctx, prompt, title_prefix):
             exhausted_tracker.clear()
             return await ctx.send("🔄 Quotas hit. Try again in a moment.")
 
-        header = f"### {title_prefix} for {ctx.author.mention}\n> **Model:** {used_model} | **Key:** #{used_key_num}"
+        header = "### {} for {}\n> **Model:** {} | **Key:** #{}".format(
+            title_prefix, ctx.author.mention, used_model, used_key_num
+        )
         await ctx.send(header)
         
         clean_text = response.text.replace("**", "")
