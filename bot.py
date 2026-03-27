@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import google.generativeai as genai
-from google.api_core import exceptions  # Added this for precise error catching
+from google.api_core import exceptions
 import os
 import re
 import traceback
@@ -12,7 +12,13 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+
+# Define the priority chain
+MODEL_CHAIN = [
+    'gemini-3-flash',        # Tier 1: Highest Intelligence (Low Limit)
+    'gemini-2.5-flash',      # Tier 2: High Intelligence (Medium Limit)
+    'gemini-2.5-flash-lite'  # Tier 3: High Limit (Reliable Backup)
+]
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -22,6 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 async def on_ready():
     print(f"--- BOT ONLINE ---")
     print(f"Logged in as: {bot.user}")
+    print(f"Primary Model: {MODEL_CHAIN[0]}")
     print(f"Sync Time: {datetime.now().strftime('%H:%M:%S')}")
     print(f"------------------")
 
@@ -33,9 +40,9 @@ async def tldr(ctx, *, args: str = "50"):
     value = int(numbers[0]) if numbers else 50
     
     transcript_list = []
-    summary_info = ""
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
+    # 1. Fetching Logic
     try:
         if is_time_mode:
             delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
@@ -65,17 +72,32 @@ async def tldr(ctx, *, args: str = "50"):
         """
 
         async with ctx.typing():
-            # Attempt AI generation
-            response = model.generate_content(prompt)
-            
+            response = None
+            used_model = ""
+
+            # --- FALLBACK LOOP ---
+            for model_name in MODEL_CHAIN:
+                try:
+                    current_model = genai.GenerativeModel(model_name)
+                    response = current_model.generate_content(prompt)
+                    used_model = model_name
+                    break # Success! Exit the loop.
+                except exceptions.ResourceExhausted:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {model_name} Quota Hit. Trying next...")
+                    continue # Try the next model in the list
+                except Exception as e:
+                    # If it's a different error (like safety filters), don't retry
+                    raise e
+
+            if not response or not response.text:
+                raise ValueError("All models failed or returned empty content.")
+
+            # --- LOGGING & OUTPUT ---
             usage = response.usage_metadata
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Tokens: {usage.total_token_count}")
-
-            if not response.text:
-                raise ValueError("AI returned no content.")
-
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Model: {used_model} | Tokens: {usage.total_token_count}")
+            
             clean_text = response.text.replace("**", "")
-            await ctx.send(f"Summary of {summary_info} as requested by {ctx.author.mention}")
+            await ctx.send(f"Summary of {summary_info} (via {used_model}) as requested by {ctx.author.mention}")
             
             for section in clean_text.split('---SPLIT---'):
                 msg_part = section.strip()
@@ -83,20 +105,17 @@ async def tldr(ctx, *, args: str = "50"):
                     formatted_part = msg_part.replace(". *", ".\n*")
                     await ctx.send(formatted_part)
                     
-    # --- SPECIFIC GOOGLE ERROR CATCHING ---
-    except exceptions.ResourceExhausted as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] QUOTA EXHAUSTED: 20/20 Limit reached.")
-        await ctx.send("🛑 **Daily Limit Reached.** I've used my 20 free summaries for the day. Please try again in 24 hours!")
-    
+    except exceptions.ResourceExhausted:
+        await ctx.send("🛑 **All models exhausted.** I've reached the daily limit for all available free engines. See you tomorrow!")
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
         traceback.print_exc()
-        await ctx.send(f"❌ Summary failed. Check the host logs.")
+        await ctx.send(f"❌ Summary failed. Check logs.")
 
 @tldr.error
 async def tldr_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         remaining = math.ceil(error.retry_after)
-        await ctx.send(f"⏳ **Cooldown active.** Please wait {remaining}s.", delete_after=10)
+        await ctx.send(f"⏳ **Cooldown active.** Wait {remaining}s.", delete_after=10)
 
 bot.run(TOKEN)
