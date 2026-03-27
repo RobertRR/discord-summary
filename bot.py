@@ -6,6 +6,8 @@ import re
 import traceback
 import asyncio
 import functools
+import sys
+import os
 from datetime import datetime, timedelta
 
 # --- FILE LOADER HELPERS ---
@@ -20,6 +22,7 @@ def load_file(filename):
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
+ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
 # --- API KEY MANAGER ---
 exhausted_tracker = {}
@@ -45,6 +48,22 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f"--- {bot.user.name} ONLINE ---")
+    print(f"Admins Loaded: {len(ADMIN_IDS)}")
+
+# --- ADMIN COMMANDS ---
+
+@bot.command(name="update")
+async def update(ctx):
+    """Restarts the container to pull the latest bot.py from GitHub."""
+    if ctx.author.id not in ADMIN_IDS:
+        return await ctx.send("⛔ **Access Denied.** Your ID is not in the admin whitelist.")
+
+    await ctx.send("🔄 **Update Triggered.** Pulling latest `bot.py` from GitHub and restarting...")
+    print(f"[{datetime.now()}] Update initiated by {ctx.author.display_name}. Shutting down...")
+    
+    # This exits the python process. 
+    # Docker's 'restart: unless-stopped' will see this and trigger the sh -c update command.
+    sys.exit(0)
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -56,6 +75,8 @@ async def keystatus(ctx):
         dead = len(exhausted_tracker.get(model, []))
         msg += f"* **{model}:** {len(ALL_KEYS)-dead}/{len(ALL_KEYS)} Keys Available\n"
     await ctx.send(msg)
+
+# --- TLDR CORE ---
 
 async def get_summary_async(model, prompt):
     loop = asyncio.get_running_loop()
@@ -89,7 +110,6 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # REFINED PROMPT: Harder stance on formatting
         prompt = f"""
         Summarize this Discord transcript grouped by user.
         
@@ -130,18 +150,15 @@ async def tldr(ctx, *, args: str = "50"):
 
             if not response:
                 exhausted_tracker.clear()
-                await ctx.send("🔄 Quotas hit. Resetting tracker and retrying...")
+                await ctx.send("🔄 Quotas hit. Resetting tracker and retrying once...")
                 return await tldr(ctx, args=args)
 
             # 3. Output logic
             header = f"### Summary for {ctx.author.mention}\n> **Context:** {summary_info} | **Model:** {used_model} | **Key:** #{used_key_num}"
             await ctx.send(header)
             
-            # Post-processing: Remove all bolding and fix underline spacing
             clean_text = response.text.replace("**", "")
-            # This regex ensures __ Name __ becomes __Name__
             clean_text = re.sub(r'__\s*(.*?)\s*__', r'__\1__', clean_text)
-            
             sections = clean_text.split("---SPLIT---")
             
             for section in sections:
