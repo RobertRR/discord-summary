@@ -4,6 +4,7 @@ import google.generativeai as genai
 import os
 from datetime import datetime, timedelta
 
+# 1. Configuration
 TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -12,74 +13,87 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Removing the default help command to use our custom one
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print("Prometheus System: Online")
+
+# 2. New Help Command
+@bot.command(name="help")
+async def custom_help(ctx):
+    embed = discord.Embed(
+        title="🤖 Discord Summarizer Help",
+        description="I use Gemini AI to summarize chat history by user.",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="📜 Summarize by Count", 
+        value="`!tldr 50` \nSummarizes the last 50 messages.", 
+        inline=False
+    )
+    embed.add_field(
+        name="⏰ Summarize by Time", 
+        value="`!tldr 1 hour` or `!tldr 30 minutes` \nSummarizes everything within that window.", 
+        inline=False
+    )
+    embed.set_footer(text="Built for Prometheus Home Server")
+    await ctx.send(embed=embed)
 
 @bot.command(name="tldr")
 async def tldr(ctx, value: str = "50", unit: str = "messages"):
-    """
-    Usage:
-    !tldr 100           -> 100 messages
-    !tldr 1 hour        -> Last 1 hour
-    !tldr 30 minutes    -> Last 30 mins
-    """
-
     transcript_list = []
     search_label = ""
 
-    # 1. Determine if we are searching by TIME or COUNT
+    # Logic to fetch history
     if unit.lower() in ["hour", "hours", "minute", "minutes", "min", "hr"]:
-        # Time-based logic
         amount = int(value)
-        if "minute" in unit.lower() or "min" in unit.lower():
-            delta = timedelta(minutes=amount)
-        else:
-            delta = timedelta(hours=amount)
-
+        delta = timedelta(minutes=amount) if "min" in unit.lower() else timedelta(hours=amount)
         search_after = discord.utils.utcnow() - delta
         search_label = f"everything since {amount} {unit} ago"
-
+        
         await ctx.send(f"⏳ Scanning messages from the last {amount} {unit}...")
-
+        
         async for msg in ctx.channel.history(after=search_after, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id:
                 continue
-            transcript_list.append(f"{msg.author.display_name}: {msg.content}")
-
+            # New Formatting: DisplayName (username)
+            transcript_list.append(f"{msg.author.display_name} ({msg.author.name}): {msg.content}")
     else:
-        # Message count logic (Default)
         count = int(value)
         search_label = f"the last {count} messages"
-
         await ctx.send(f"📂 Fetching the last {count} messages...")
-
+        
         async for msg in ctx.channel.history(limit=count + 5):
             if msg.author.bot or msg.id == ctx.message.id:
                 continue
-            transcript_list.append(f"{msg.author.display_name}: {msg.content}")
+            # New Formatting: DisplayName (username)
+            transcript_list.append(f"{msg.author.display_name} ({msg.author.name}): {msg.content}")
             if len(transcript_list) >= count:
                 break
-        # History is newest -> oldest, so reverse it for the AI
         transcript_list.reverse()
 
     if not transcript_list:
-        await ctx.send("Empty handed! No recent messages found to summarize.")
+        await ctx.send("No messages found in that range.")
         return
 
-    # 2. Prepare the prompt
+    # Prepare Prompt
     transcript = "\n".join(transcript_list)
     prompt = f"""
     Summarize this Discord transcript ({search_label}).
-
-    FORMATTING:
-    - Group by user using: __**USERNAME**__
+    
+    FORMATTING RULES:
+    - Group by user. 
+    - Use this exact header format: __**Display Name (username)**__
     - Use '---SPLIT---' between each user's block.
-    - Be punchy and keep it to the main points.
-
+    - Be concise and focus on key points/actions.
+    
     TRANSCRIPT:
     {transcript}
     """
 
-    # 3. Generate with Gemini
     try:
         async with ctx.typing():
             response = model.generate_content(prompt)
@@ -88,6 +102,6 @@ async def tldr(ctx, value: str = "50", unit: str = "messages"):
                     await ctx.send(section.strip())
     except Exception as e:
         print(f"Gemini Error: {e}")
-        await ctx.send("❌ Something went wrong with the summary. Try a shorter timeframe.")
+        await ctx.send("❌ Summary failed. Check logs on Prometheus.")
 
 bot.run(TOKEN)
