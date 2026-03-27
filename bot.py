@@ -158,15 +158,14 @@ async def moggboard(ctx):
         rank_class = get_rank_class(ratio)
         ratio_pct = "{:.1f}%".format(ratio * 100)
         
-        # Emoji for the top 3
+        # Adding medals for top 3
         medal = ""
-        if i == 1: medal = "🥇 "
-        elif i == 2: medal = "🥈 "
-        elif i == 3: medal = "🥉 "
+        if i == 1: medal = "🥇"
+        elif i == 2: medal = "🥈"
+        elif i == 3: medal = "🥉"
 
-        msg += "**{}{} {}**\n".format(medal, i, user_name)
-        msg += "> **Class:** `{}` | **Ratio:** `{}`\n".format(rank_class, ratio_pct)
-        msg += "> **Stats:** `{}W - {}L` (Total: {})\n\n".format(w, l, total)
+        msg += "{}. **{}** {}\n".format(i, user_name, medal)
+        msg += "> **Class:** `{}` | **Ratio:** `{}` | **Stats:** `{}W - {}L`\n\n".format(rank_class, ratio_pct, w, l)
 
     await ctx.send(msg)
 
@@ -225,6 +224,8 @@ async def fetch_history(ctx, args):
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
+    try: await ctx.message.add_reaction("✅")
+    except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     full_transcript = "\n".join(transcript)
@@ -234,6 +235,8 @@ async def tldr(ctx, *, args: str = "50"):
 @bot.command(name="arguments")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def arguments(ctx, *, args: str = "50"):
+    try: await ctx.message.add_reaction("✅")
+    except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     full_transcript = "\n".join(transcript)
