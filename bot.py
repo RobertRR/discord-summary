@@ -13,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.4 🤖🚀✨"
+BOT_VERSION = "v3.5 🛠️✅✨"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -36,7 +36,7 @@ def load_file(filename):
         with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        log_info("CRITICAL: {} not found in {}".format(filename, os.getcwd()))
+        log_info(f"CRITICAL: {filename} not found in {os.getcwd()}")
         return []
 
 def load_json_data(filename):
@@ -56,7 +56,7 @@ def save_json_data(filename, data):
             f.flush()
             os.fsync(f.fileno())
     except Exception as e:
-        log_info("Failed to save {}: {}".format(filename, e))
+        log_info(f"Failed to save {filename}: {e}")
 
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
@@ -89,7 +89,7 @@ bot.remove_command('help')
 # --- RECOVERY LOGIC ---
 @bot.event
 async def on_ready():
-    log_info("--- {} ONLINE (Version {}) ---".format(bot.user.name, BOT_VERSION))
+    log_info(f"--- {bot.user.name} ONLINE (Version {BOT_VERSION}) ---")
     await asyncio.sleep(5) 
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
@@ -102,7 +102,7 @@ async def on_ready():
                     if channel:
                         await channel.send(f"✅ **Update Completed:** I am back online. Current Version: **{BOT_VERSION}**")
         except Exception as e:
-            log_info("Recovery Message Failed: {}".format(e))
+            log_info(f"Recovery Message Failed: {e}")
         finally:
             if os.path.exists(update_file): os.remove(update_file)
 
@@ -126,9 +126,9 @@ async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
         "* **!tldr [amount]**\n"
-        "  Summaries + **Cortisol Spike** detection (Toxicity results in Mogg penalties).\n\n"
+        "  Summaries + **Cortisol Spike** detection.\n\n"
         "* **!arguments [amount]**\n"
-        "  Conflict Analysis and manual Mogg updates.\n\n"
+        "  Conflict Analysis and Mogg updates.\n\n"
         "* **!moggboard**\n"
         "  View the server's dominance hierarchy.\n\n"
         "* **!clearmogs**\n"
@@ -230,7 +230,11 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = f"""Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{"\n".join(transcript)}"""
+    
+    # FIX: Join transcript outside of the f-string to avoid backslash error
+    history_text = "\n".join(transcript)
+    
+    prompt = f"""Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"""
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
 @bot.command(name="arguments")
@@ -240,7 +244,11 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = f"""Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{"\n".join(transcript)}"""
+    
+    # FIX: Join transcript outside of the f-string to avoid backslash error
+    history_text = "\n".join(transcript)
+    
+    prompt = f"""Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"""
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
