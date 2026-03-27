@@ -36,7 +36,7 @@ async def tldr(ctx, *, args: str = "50"):
 
     # 2. History Fetching Logic
     if is_time_mode:
-        if any(m in raw_input for m in ["min", "minute"]):
+        if any(m in raw_input for m in ["min", "minute", "mins", "minutes"]):
             delta = timedelta(minutes=value)
             summary_info = f"the last {value} minutes"
         else:
@@ -63,8 +63,8 @@ async def tldr(ctx, *, args: str = "50"):
     
     STRICT RULES:
     - Group by person.
-    - Header: __DISPLAY_NAME [username]__
-    - DO NOT USE BOLD (**). Use only double underscores (__) for the header.
+    - Sort and format each person's reply by : __DISPLAY_NAME [username]__
+    - DO NOT USE BOLD (**). Use only double underscores (__) for the formatting of each person's summary.
     - Use the 'DISPLAY_NAME' and 'USERNAME' provided in the transcript.
     - Separate users with '---SPLIT---'.
     
