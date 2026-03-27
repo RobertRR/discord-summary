@@ -19,6 +19,7 @@ def load_file(filename):
         print(f"CRITICAL: {filename} not found!")
         return []
 
+# Load data from local files
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
@@ -48,21 +49,24 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f"--- {bot.user.name} ONLINE ---")
-    print(f"Admins Loaded: {len(ADMIN_IDS)}")
+    
+    # Notify the primary admin that the bot is back up
+    if ADMIN_IDS:
+        try:
+            admin = await bot.fetch_user(ADMIN_IDS[0])
+            await admin.send(f"✅ **System Online:** Bot has restarted and is running the latest version from GitHub.")
+        except Exception as e:
+            print(f"Could not send boot notification to admin: {e}")
 
 # --- ADMIN COMMANDS ---
 
 @bot.command(name="update")
 async def update(ctx):
-    """Restarts the container to pull the latest bot.py from GitHub."""
     if ctx.author.id not in ADMIN_IDS:
-        return await ctx.send("⛔ **Access Denied.** Your ID is not in the admin whitelist.")
+        return await ctx.send("⛔ **Access Denied.** Admin ID not recognized.")
 
-    await ctx.send("🔄 **Update Triggered.** Pulling latest `bot.py` from GitHub and restarting...")
-    print(f"[{datetime.now()}] Update initiated by {ctx.author.display_name}. Shutting down...")
-    
-    # This exits the python process. 
-    # Docker's 'restart: unless-stopped' will see this and trigger the sh -c update command.
+    await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting container...")
+    print(f"Update initiated by {ctx.author.display_name}. Exiting...")
     sys.exit(0)
 
 @bot.command(name="keystatus")
@@ -110,6 +114,9 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
+        # FIX: Move the join OUTSIDE the f-string for Python 3.11 compatibility
+        full_transcript = "\n".join(transcript_list)
+
         prompt = f"""
         Summarize this Discord transcript grouped by user.
         
@@ -121,7 +128,7 @@ async def tldr(ctx, *, args: str = "50"):
         5. Use '---SPLIT---' between different users.
         
         TRANSCRIPT:
-        {"\n".join(transcript_list)}
+        {full_transcript}
         """
 
         # 2. KEY-PRIORITY LOGIC
