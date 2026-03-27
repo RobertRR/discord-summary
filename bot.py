@@ -15,12 +15,11 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_KEY)
 
 # 2026 Model Priority Chain
-# If one fails or is 'Not Found', it moves to the next.
 MODEL_CHAIN = [
-    'gemini-3.1-pro-preview',        # Best intelligence (Tier 1)
-    'gemini-3-flash-preview',        # Balanced Speed/IQ (Tier 2) - FIXED ID
-    'gemini-2.5-flash',              # High Reliability (Tier 3)
-    'gemini-3.1-flash-lite-preview'  # High-Volume Workhorse (Tier 4)
+    'gemini-3.1-pro-preview',
+    'gemini-3-flash-preview',
+    'gemini-2.5-flash',
+    'gemini-3.1-flash-lite-preview'
 ]
 
 # --- BOT SETUP ---
@@ -37,7 +36,6 @@ async def on_ready():
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
-    # Parse input for time (e.g., 1 hour) or count (e.g., 50)
     raw_input = args.lower()
     numbers = re.findall(r'\d+', raw_input)
     value = int(numbers[0]) if numbers else 50
@@ -52,11 +50,13 @@ async def tldr(ctx, *, args: str = "50"):
             summary_info = f"the last {value} {'mins' if 'min' in raw_input else 'hours'}"
             async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
                 if msg.author.bot or msg.id == ctx.message.id: continue
+                # FIX: Uses display_name (Server Nickname)
                 transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}")
         else:
             summary_info = f"the last {value} messages"
             async for msg in ctx.channel.history(limit=value + 10):
                 if msg.author.bot or msg.id == ctx.message.id: continue
+                # FIX: Uses display_name (Server Nickname)
                 transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}")
                 if len(transcript_list) >= value: break
             transcript_list.reverse()
@@ -74,17 +74,14 @@ async def tldr(ctx, *, args: str = "50"):
             for model_name in MODEL_CHAIN:
                 try:
                     current_model = genai.GenerativeModel(model_name)
-                    # Attempt generation
                     response = current_model.generate_content(prompt)
                     used_model = model_name
-                    break  # Success! Exit the loop.
+                    break 
                 except (exceptions.ResourceExhausted, exceptions.NotFound) as e:
-                    # Logs why it's skipping to the next model in your terminal/Docker logs
-                    error_type = "Quota" if isinstance(e, exceptions.ResourceExhausted) else "404 Not Found"
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {model_name} failed ({error_type}). Trying next...")
+                    reason = "Quota" if isinstance(e, exceptions.ResourceExhausted) else "404 Not Found"
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {model_name} failed ({reason}). Trying next...")
                     continue 
                 except Exception as e:
-                    # Re-raise safety filters or actual logic errors
                     raise e
 
             if not response:
@@ -92,9 +89,11 @@ async def tldr(ctx, *, args: str = "50"):
 
             # 3. Final Output
             print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Model: {used_model}")
-            await ctx.send(f"**Summary of {summary_info}** (Generated via {used_model})")
             
-            # Discord has a 2000 character message limit
+            # FIX: Mentions the requesting user and identifies the model
+            header = f"### Summary of {summary_info} for {ctx.author.mention}\n*(Generated via {used_model})*"
+            await ctx.send(header)
+            
             summary_text = response.text
             if len(summary_text) > 1950:
                 summary_text = summary_text[:1950] + "..."
