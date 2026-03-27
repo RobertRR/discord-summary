@@ -19,7 +19,6 @@ def load_file(filename):
         print(f"CRITICAL: {filename} not found!")
         return []
 
-# Load data from local files
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
@@ -44,13 +43,12 @@ MODEL_CHAIN = [
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
+# help_command=None remains so we can use our custom pretty version
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
     print(f"--- {bot.user.name} ONLINE ---")
-    
-    # Notify the primary admin that the bot is back up
     if ADMIN_IDS:
         try:
             admin = await bot.fetch_user(ADMIN_IDS[0])
@@ -58,15 +56,39 @@ async def on_ready():
         except Exception as e:
             print(f"Could not send boot notification to admin: {e}")
 
-# --- ADMIN COMMANDS ---
+# --- COMMANDS ---
+
+@bot.command(name="help")
+async def help_command(ctx):
+    """Lists all available commands and their usage."""
+    help_text = (
+        "### 🤖 Bot Commands\n"
+        "* **!tldr [amount]**\n"
+        "  Summarizes recent activity. Examples:\n"
+        "  `!tldr 50` (Last 50 messages)\n"
+        "  `!tldr 30min` (Last 30 minutes)\n"
+        "  `!tldr 2hr` (Last 2 hours)\n\n"
+        "* **!keystatus**\n"
+        "  Check the health and quota of the AI API keys.\n\n"
+        "* **!help**\n"
+        "  Shows this message."
+    )
+    
+    # Add Admin-only commands to the list if the user is an admin
+    if ctx.author.id in ADMIN_IDS:
+        help_text += (
+            "\n\n**👑 Admin Commands**\n"
+            "* **!update**\n"
+            "  Pulls the latest code from GitHub and restarts the bot."
+        )
+    
+    await ctx.send(help_text)
 
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.** Admin ID not recognized.")
-
     await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting container...")
-    print(f"Update initiated by {ctx.author.display_name}. Exiting...")
     sys.exit(0)
 
 @bot.command(name="keystatus")
@@ -114,7 +136,6 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # FIX: Move the join OUTSIDE the f-string for Python 3.11 compatibility
         full_transcript = "\n".join(transcript_list)
 
         prompt = f"""
