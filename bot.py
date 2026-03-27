@@ -26,12 +26,12 @@ async def custom_help(ctx):
         color=discord.Color.blue()
     )
     embed.add_field(name="📜 By Count", value="`!tldr 50` or `!tldr messages 50`", inline=False)
-    embed.add_field(name="⏰ By Time", value="`!tldr 1 hour` or `!tldr 30 minutes`", inline=False)
+    embed.add_field(name="⏰ By Time", value="`!tldr 1 hour` or `!tldr 30 mins`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command(name="tldr")
 async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
-    # 1. Smart Input Handling
+    # 1. Input Handling
     if arg1.isdigit():
         value, unit = int(arg1), arg2.lower()
     elif arg2.isdigit():
@@ -42,10 +42,18 @@ async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
     transcript_list = []
     header_text = ""
     
-    # 2. Fetching Logic
-    if unit in ["hour", "hours", "minute", "minutes", "min", "hr"]:
-        delta = timedelta(minutes=value) if "min" in unit else timedelta(hours=value)
-        header_text = f"Summary of the last {value} {unit} as requested by {ctx.author.mention}"
+    # 2. Flexible Time Detection (min, mins, minutes, hour, hours, hr)
+    is_time = any(u in unit for u in ["min", "hour", "hr"])
+    
+    if is_time:
+        if "min" in unit:
+            delta = timedelta(minutes=value)
+            display_unit = "minutes"
+        else:
+            delta = timedelta(hours=value)
+            display_unit = "hours"
+            
+        header_text = f"Summary of the last {value} {display_unit} as requested by {ctx.author.mention}"
         
         async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
@@ -60,22 +68,21 @@ async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
         transcript_list.reverse()
 
     if not transcript_list:
-        return await ctx.send("No messages found.")
+        return await ctx.send("No messages found in that range.")
 
-    # 3. Send the Header Message First
+    # 3. Post the Header FIRST as its own message
     await ctx.send(header_text)
 
-    # 4. Prepare Prompt for Gemini
+    # 4. Prompt for Gemini
     transcript = "\n".join(transcript_list)
     prompt = f"""
     Summarize the following Discord transcript. 
     
     STRICT FORMATTING RULES:
-    - Group the summary by the person who spoke.
-    - Every user section MUST start with their name formatted exactly like this: __DISPLAY_NAME [username]__
-    - DO NOT use bold (**). Use only double underscores (__) for the header.
-    - Use 'DISPLAY_NAME' and 'USERNAME' tags from the transcript for the header.
-    - Separate each user's summary block with '---SPLIT---'.
+    - Group by person.
+    - Header: __DISPLAY_NAME [username]__ (Underline only, NO bold).
+    - Separate users with '---SPLIT---'.
+    - Use the provided DISPLAY_NAME and USERNAME tags accurately.
     
     TRANSCRIPT:
     {transcript}
@@ -84,12 +91,11 @@ async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
     try:
         async with ctx.typing():
             response = model.generate_content(prompt)
-            # Send summaries as separate follow-up messages
             for section in response.text.split('---SPLIT---'):
                 if section.strip():
                     await ctx.send(section.strip())
     except Exception as e:
         print(f"Error: {e}")
-        await ctx.send("❌ Summary failed.")
+        await ctx.send("❌ Gemini failed to process the summary.")
 
 bot.run(TOKEN)
