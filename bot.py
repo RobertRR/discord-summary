@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} | Sync Time: {datetime.now().strftime('%H:%M:%S')}")
+    print(f"Logged in as {bot.user} | Prometheus Update: {datetime.now().strftime('%H:%M:%S')}")
 
 @bot.command(name="tldr")
 async def tldr(ctx, *, args: str = "50"):
@@ -31,6 +31,7 @@ async def tldr(ctx, *, args: str = "50"):
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
     try:
+        # 1. Fetching Logic
         if is_time_mode:
             if "min" in raw_input:
                 delta = timedelta(minutes=value)
@@ -53,19 +54,24 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # --- PREPARE THE PROMPT ---
+        # 2. Strict Formatting Prompt
         full_transcript_text = "\n".join(transcript_list)
         prompt = f"""
-        Summarize this Discord transcript into concise bullet points.
+        Summarize this Discord transcript. Group by user.
         
+        OUTPUT FORMAT EXAMPLE (FOLLOW THIS EXACTLY):
+        __Display Name [username]__
+        * Point one about what they said
+        * Point two about their request
+        ---SPLIT---
+
         STRICT RULES:
-        - Group by person.
-        - Header: __DISPLAY_NAME [username]__
-        - FORMAT: Use an asterisk (*) for each bullet point. 
-        - NO PARAGRAPHS.
-        - NO BOLD (**). Use only double underscores (__) for the header.
-        - Separate users with '---SPLIT---'.
-        
+        1. Use ONLY double underscores (__) for the header.
+        2. DO NOT use any bold (**). Strip all bolding.
+        3. Use a single asterisk (*) for bullet points.
+        4. NO PARAGRAPHS. Only bullet points.
+        5. Separate each person's block with '---SPLIT---'.
+
         TRANSCRIPT:
         {full_transcript_text}
         """
@@ -76,21 +82,5 @@ async def tldr(ctx, *, args: str = "50"):
             if not response.text:
                 raise ValueError("Gemini returned an empty response.")
 
-            # Scrub all bolding
-            clean_text = response.text.replace("**", "")
-            
-            # 1. Send the header
-            await ctx.send(f"Summary of {summary_info} as requested by {ctx.author.mention}")
-            
-            # 2. Send the summaries
-            for section in clean_text.split('---SPLIT---'):
-                if section.strip():
-                    await ctx.send(section.strip())
-                    
-    except Exception as e:
-        # This will print the full error to your Prometheus logs
-        print(f"CRITICAL ERROR: {str(e)}")
-        traceback.print_exc()
-        await ctx.send(f"❌ Summary failed. Error: {str(e)}")
-
-bot.run(TOKEN)
+            # Scrub all bolding programmatically
+            clean_text = response
