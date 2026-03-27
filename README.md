@@ -7,6 +7,8 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations usin
 ## 🌟 Features
 
 * **Smart Summaries:** Grouped by user with clean, underlined headers and bullet points.
+* **👑 The Moggboard:** A competitive dominance hierarchy. The AI analyzes arguments (`!arguments`), declares a winner, and ranks users based on their win/loss ratio and custom RPG-style classes (Immortal, Divine, etc.).
+* **Argument Solver:** Read the chat history, find out who was arguing and pick a winner.
 * **API Key Rotation:** Automatically cycles through multiple Gemini API keys to maximize free-tier quotas.
 * **Model Fallback:** Automatically tries higher-tier models (3.1 Pro) before falling back to faster, lighter models.
 * **Self-Updating:** Admin-only `!update` command pulls the latest code from GitHub and restarts the container instantly.
@@ -20,10 +22,12 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations usin
 | Command | Description | Access |
 | :--- | :--- | :--- |
 | `!help` | Displays the help menu and command list. | Everyone |
-| `!tldr [val]` | Summarizes chat history. Supports message counts (`!tldr 50`) or time (`!tldr 30 mins`, `!tldr 2hr`). | Everyone |
-| `!keystatus` | Shows the current health and quota status of all configured Gemini API keys. | Everyone |
-| `!update` | **(Admin Only)** Triggers the bot to pull the latest `bot.py` from GitHub and restart the container. | **Admins** |
-
+| `!tldr [val]` | Summarizes chat history with jump-links to key messages. | Everyone |
+| `!arguments [val]` | Analyzes conflicts, settles verdicts, and updates the Moggboard. | Everyone |
+| `!moggboard` | Displays the server's dominance hierarchy and rankings. | Everyone |
+| `!keystatus` | Shows API health, cooldown timers, and remaining daily usage. | Everyone |
+| `!clearmogs` | **(Admin Only)** Resets all Moggboard statistics to zero. | **Admins** |
+| `!update` | **(Admin Only)** Pulls the latest code and restarts the bot. | **Admins** |
 
 
 ## 📋 Deployment and Setup
