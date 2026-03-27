@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.11 - Permission & Update Fix 🛠️🔄"
+BOT_VERSION = "v3.12 - Directory Permission Audit 🛡️🔍"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -23,6 +23,19 @@ app_log.addHandler(my_handler)
 def log_info(msg):
     print(msg)
     app_log.info(msg)
+
+# --- STARTUP PERMISSION CHECK ---
+def check_write_permissions():
+    test_file = "permission_test.tmp"
+    try:
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        log_info("SUCCESS: Bot has write access to the directory.")
+        return True
+    except Exception as e:
+        log_info(f"CRITICAL: Bot lacks write access! Error: {e}")
+        return False
 
 # --- FILE & DATA PERSISTENCE ---
 def load_file(filename):
@@ -52,6 +65,9 @@ def save_json_data(filename, data):
             os.fsync(f.fileno())
     except Exception as e:
         log_info(f"Failed to save {filename}: {e}")
+
+# Run permission audit
+has_write_access = check_write_permissions()
 
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
@@ -84,6 +100,9 @@ bot.remove_command('help')
 @bot.event
 async def on_ready():
     log_info(f"--- {bot.user.name} ONLINE (Version {BOT_VERSION}) ---")
+    if not has_write_access:
+        log_info("WARNING: The bot will likely fail to self-update due to permissions.")
+    
     await asyncio.sleep(5) 
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
@@ -191,7 +210,6 @@ async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Access Denied.")
     await ctx.send("🔄 Deleting local script and pulling fresh code...")
     
-    # Force delete the file from within Python to solve permission locks
     try:
         script_path = os.path.join(os.getcwd(), "bot.py")
         if os.path.exists(script_path):
