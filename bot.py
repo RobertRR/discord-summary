@@ -2,18 +2,12 @@ import discord
 from discord.ext import commands
 import google.generativeai as genai
 from google.api_core import exceptions
-import re
-import asyncio
-import functools
-import sys
-import os
-import logging
-import json
+import re, asyncio, functools, sys, os, json
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.5 🛠️✅✨"
+BOT_VERSION = "v3.6 📋✨"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -36,7 +30,7 @@ def load_file(filename):
         with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        log_info(f"CRITICAL: {filename} not found in {os.getcwd()}")
+        log_info(f"CRITICAL: {filename} not found")
         return []
 
 def load_json_data(filename):
@@ -86,7 +80,6 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
 
-# --- RECOVERY LOGIC ---
 @bot.event
 async def on_ready():
     log_info(f"--- {bot.user.name} ONLINE (Version {BOT_VERSION}) ---")
@@ -106,7 +99,6 @@ async def on_ready():
         finally:
             if os.path.exists(update_file): os.remove(update_file)
 
-# --- RANKING LOGIC ---
 def get_rank_class(ratio):
     r = ratio * 100
     if r >= 99.5: return "Immortal"
@@ -119,28 +111,28 @@ def get_rank_class(ratio):
     if r > 0: return "Herald"
     return "Unranked"
 
-# --- COMMANDS ---
-
 @bot.command(name="help")
 async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
+        "* **!version**\n"
+        "  Shows the current build version.\n\n"
         "* **!tldr [amount]**\n"
         "  Summaries + **Cortisol Spike** detection.\n\n"
         "* **!arguments [amount]**\n"
         "  Conflict Analysis and Mogg updates.\n\n"
         "* **!moggboard**\n"
         "  View the server's dominance hierarchy.\n\n"
-        "* **!clearmogs**\n"
-        "  **(Admin Only)** Resets Moggboard data.\n\n"
         "* **!keystatus**\n"
         "  Check API health and daily quotas.\n\n"
+        "---\n"
+        "### 🛡️ Admin Commands\n"
+        "* **!clearmogs**\n"
+        "  Resets Moggboard data to zero.\n\n"
         "* **!botlog**\n"
-        "  **(Admin Only)** Displays the last 10 lines of the terminal log.\n\n"
-        "* **!version**\n"
-        "  Shows the current build version.\n\n"
+        "  Displays the last 10 lines of the terminal log.\n\n"
         "* **!update**\n"
-        "  **(Admin Only)** Pulls latest code from GitHub and restarts."
+        "  Pulls latest code from GitHub and restarts the container."
     )
     await ctx.send(help_text)
 
@@ -198,7 +190,6 @@ async def update(ctx):
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
-# --- CORE LOGIC ---
 async def get_ai_response_async(model, prompt):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
@@ -230,11 +221,8 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    
-    # FIX: Join transcript outside f-string
     history_text = "\n".join(transcript)
-    
-    prompt = f"""Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"""
+    prompt = f"Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
 @bot.command(name="arguments")
@@ -244,11 +232,8 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    
-    # FIX: Join transcript outside f-string
     history_text = "\n".join(transcript)
-    
-    prompt = f"""Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"""
+    prompt = f"Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
