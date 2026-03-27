@@ -51,6 +51,8 @@ def save_json_data(filename, data):
     try:
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
     except Exception as e:
         log_info("Failed to save {}: {}".format(filename, e))
 
@@ -60,10 +62,9 @@ ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
 # --- API & QUOTA CONFIG ---
-exhausted_tracker = {} # { model: { key_index: expiry_dt } }
+exhausted_tracker = {} 
 MODEL_CHAIN = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 
-# Estimated Daily Limits for Free Tier Preview Models
 DAILY_LIMITS = {
     'gemini-3.1-pro-preview': 5,
     'gemini-3-flash-preview': 50,
@@ -117,6 +118,19 @@ async def on_ready():
         finally:
             if os.path.exists(update_file): os.remove(update_file)
 
+# --- RANKING LOGIC ---
+def get_rank_class(ratio):
+    r = ratio * 100
+    if r >= 99.5: return "Immortal"
+    if r >= 90: return "Divine"
+    if r >= 75: return "Ancient"
+    if r >= 55: return "Legend"
+    if r >= 40: return "Archon"
+    if r >= 30: return "Crusader"
+    if r >= 15: return "Guardian"
+    if r > 0: return "Herald"
+    return "Unranked"
+
 # --- COMMANDS ---
 
 @bot.command(name="help")
@@ -141,21 +155,30 @@ async def help_command(ctx):
 @bot.command(name="moggboard")
 async def moggboard(ctx):
     data = load_json_data("mogg_stats.json")
-    if not data: return await ctx.send("The Moggboard is empty.")
-    sorted_users = sorted(data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
+    if not data: return await ctx.send("The Moggboard is currently empty.")
+    
+    sorted_users = sorted(
+        data.items(), 
+        key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), 
+        reverse=True
+    )
+    
     msg = "## 👑 THE OFFICIAL MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
         w, l = stats['wins'], stats['losses']
-        ratio = (w / (w+l) if (w+l)>0 else 0) * 100
+        ratio = (w / (w+l) if (w+l)>0 else 0)
+        rank_class = get_rank_class(ratio)
         medal = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else ""
-        msg += "{}. **{}** {}\n> `{}W - {}L` ({:.1f}%)\n".format(i, user, medal, w, l, ratio)
+        msg += "{}. **{}** {}\n> **Class:** `{}` | **Stats:** `{}W - {}L` ({:.1f}%)\n\n".format(
+            i, user, medal, rank_class, w, l, ratio*100
+        )
     await ctx.send(msg)
 
 @bot.command(name="clearmogs")
 async def clearmogs(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Admin only.")
     save_json_data("mogg_stats.json", {})
-    await ctx.send("🗑️ Moggboard Reset.")
+    await ctx.send("🗑️ **Moggboard Reset.** All stats cleared.")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -164,27 +187,21 @@ async def keystatus(ctx):
     msg = "### 🔑 API Key & Quota Status\n"
     
     for model in MODEL_CHAIN:
-        # 1. Rate Limit Check (Per Minute)
         if model in exhausted_tracker:
             exhausted_tracker[model] = {k: v for k, v in exhausted_tracker[model].items() if v > now}
         
         dead_count = len(exhausted_tracker.get(model, {}))
         available = len(ALL_KEYS) - dead_count
-        
-        # 2. Daily Limit Check (Per Day Total)
         used = usage.get(model, 0)
         total_limit = DAILY_LIMITS.get(model, 0) * len(ALL_KEYS)
         remaining = max(0, total_limit - used)
         
         msg += "* **{}**\n".format(model)
         msg += "  └ Rate: `{}/{}` keys ready".format(available, len(ALL_KEYS))
-        
         if dead_count > 0:
             next_up = min(exhausted_tracker[model].values())
             msg += " (Wait: `{}s`)".format(int((next_up - now).total_seconds()))
-            
-        msg += "\n  └ Daily: `{}/{}` used (Est. `{}` left today)\n".format(used, total_limit, remaining)
-
+        msg += "\n  └ Daily: `{}/{}` used (Est. `{}` left)\n".format(used, total_limit, remaining)
     await ctx.send(msg)
 
 @bot.command(name="update")
@@ -237,9 +254,31 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = """Analyze the following transcript for arguments. Use '---SPLIT---' between these 4 sections: 
-    1. Conflict Summary 2. Key Points 3. Verdict 4. Mogg Rating (WINNER: [Name] | LOSER: [Name]).
-    If no argument, say 'Everybody is too busy working hard (lmao).'.\n\nTRANSCRIPT:\n{}""".format("\n".join(transcript))
+    
+    prompt = """
+    Analyze the following Discord transcript for disagreements.
+    
+    # CONFLICT SUMMARY
+    Briefly list each argument found. State who was involved.
+
+    # KEY POINTS
+    Side A vs Side B. Use [Context](URL) links for major points.
+
+    # VERDICT & REASONING
+    Analyze who is logically 'more right' and EXPLAIN why in detail here.
+
+    # MOGG DATA
+    This section is for system tracking. You MUST use the exact format below.
+    Use ONLY the display name. DO NOT add brackets, IDs, or extra text.
+    Format: "WINNER: [Name] | LOSER: [Name]"
+
+    RULES:
+    - Use '---SPLIT---' to separate these 4 sections.
+    - If no argument exists, say 'Everybody is too busy working hard (lmao).'.
+    
+    TRANSCRIPT:
+    {}
+    """.format("\n".join(transcript))
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
@@ -257,7 +296,7 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
-                    increment_usage(model_name) # SUCCESSFUL CALL LOGGED
+                    increment_usage(model_name)
                     break 
                 except exceptions.ResourceExhausted:
                     exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
@@ -273,14 +312,23 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
         sections = response.text.split("---SPLIT---")
 
         if update_stats:
-            match = re.search(r"WINNER:\s*(.*?)\s*\|\s*LOSER:\s*(.*)", sections[-1] if len(sections)>=4 else "", re.IGNORECASE)
+            # Look specifically at the last section for the WINNER/LOSER string
+            mogg_section = sections[-1] if len(sections) >= 4 else ""
+            # Improved regex to handle potential trailing punctuation but stop at the name
+            match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", mogg_section, re.IGNORECASE)
+            
             if match:
-                w, l = match.group(1).strip(), match.group(2).strip()
+                winner = match.group(1).strip().rstrip('.,!')
+                loser = match.group(2).strip().rstrip('.,!')
                 data = load_json_data("mogg_stats.json")
-                for p in [w, l]: 
-                    if p not in data: data[p] = {"wins":0, "losses":0}
-                data[w]["wins"] += 1; data[l]["losses"] += 1
+                
+                for p in [winner, loser]:
+                    if p not in data: data[p] = {"wins": 0, "losses": 0}
+                
+                data[winner]["wins"] += 1
+                data[loser]["losses"] += 1
                 save_json_data("mogg_stats.json", data)
+                log_info("Moggboard Updated: {} > {}".format(winner, loser))
 
         for s in sections:
             content = s.strip()
