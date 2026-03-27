@@ -9,6 +9,7 @@ import functools
 import sys
 import os
 import logging
+import json
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
@@ -26,16 +27,27 @@ def log_info(msg):
     print(msg)
     app_log.info(msg)
 
-# --- FILE LOADER ---
+# --- FILE & DATA PERSISTENCE ---
 def load_file(filename):
     try:
-        # Using absolute paths to ensure Docker finds them
         path = os.path.join(os.getcwd(), filename)
         with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
         log_info("CRITICAL: {} not found in {}".format(filename, os.getcwd()))
         return []
+
+def load_mogg_data():
+    path = os.path.join(os.getcwd(), "mogg_stats.json")
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_mogg_data(data):
+    path = os.path.join(os.getcwd(), "mogg_stats.json")
+    with open(path, "w") as f:
+        json.dump(data, f, indent=4)
 
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
@@ -61,26 +73,33 @@ bot.remove_command('help')
 @bot.event
 async def on_ready():
     log_info("--- {} ONLINE ---".format(bot.user.name))
-    
-    # Wait a moment for the cache to populate
     await asyncio.sleep(2)
-    
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f:
                 channel_id = int(f.read().strip())
-            
             channel = bot.get_channel(channel_id)
             if channel:
-                await channel.send("✅ **Update Completed:** The bot has successfully restarted and is now running the latest code.")
-            else:
-                log_info("Could not find channel ID {} after restart.".format(channel_id))
+                await channel.send("✅ **Update Completed:** The bot has successfully restarted.")
         except Exception as e:
             log_info("Failed to post update message: {}".format(e))
         finally:
             if os.path.exists(update_file):
                 os.remove(update_file)
+
+# --- RANKING LOGIC ---
+def get_rank_class(ratio):
+    r = ratio * 100
+    if r >= 99.5: return "Immortal" # Top ~1% logic
+    if r >= 90: return "Divine"
+    if r >= 75: return "Ancient"
+    if r >= 55: return "Legend"
+    if r >= 40: return "Archon"
+    if r >= 30: return "Crusader"
+    if r >= 15: return "Guardian"
+    if r > 0: return "Herald"
+    return "Unranked"
 
 # --- COMMANDS ---
 
@@ -89,9 +108,11 @@ async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
         "* **!tldr [amount]**\n"
-        "  Summarizes activity with jump-links to messages.\n\n"
+        "  Summarizes activity with jump-links.\n\n"
         "* **!arguments [amount]**\n"
-        "  Analyzes conflicts, identifies who got mogged, and provides verdicts.\n\n"
+        "  Analyzes conflicts and updates the Moggboard.\n\n"
+        "* **!moggboard**\n"
+        "  View the server power rankings.\n\n"
         "* **!keystatus**\n"
         "  Check AI API key health.\n\n"
         "* **!update**\n"
@@ -99,26 +120,49 @@ async def help_command(ctx):
     )
     await ctx.send(help_text)
 
+@bot.command(name="moggboard")
+async def moggboard(ctx):
+    data = load_mogg_data()
+    if not data:
+        return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
+
+    # Sort by Mogg Wins, then Ratio
+    sorted_users = sorted(
+        data.items(), 
+        key=lambda x: (x[1]['wins'], x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1)), 
+        reverse=True
+    )
+
+    msg = "## 🏆 THE OFFICIAL MOGGBOARD\n"
+    msg += "| Rank | User | Wins | Losses | Ratio | Class |\n"
+    msg += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+
+    for i, (user_name, stats) in enumerate(sorted_users, 1):
+        w = stats['wins']
+        l = stats['losses']
+        ratio = w / (w + l) if (w + l) > 0 else 0
+        rank_class = get_rank_class(ratio)
+        
+        # Format ratio as percentage
+        ratio_pct = "{:.1f}%".format(ratio * 100)
+        
+        msg += "| #{} | **{}** | {} | {} | {} | *{}* |\n".format(i, user_name, w, l, ratio_pct, rank_class)
+
+    await ctx.send(msg)
+
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.**")
-    
-    await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting...")
-    
+    await ctx.send("🔄 **Update Triggered.** Restarting...")
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     try:
-        # Force a sync to the disk before exiting
         with open(update_file, "w") as f:
             f.write(str(ctx.channel.id))
             f.flush()
             os.fsync(f.fileno())
-        log_info("Update channel saved. Restarting...")
-        sys.exit(0)
-    except Exception as e:
-        log_info("CRITICAL: Failed to write update_channel.txt: {}".format(e))
-        await ctx.send("⚠️ **Error:** Could not save restart state. Update might still occur, but I won't be able to post a completion message.")
-        sys.exit(0)
+    except: pass
+    sys.exit(0)
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -143,7 +187,6 @@ async def fetch_history(ctx, args):
     value = int(numbers[0]) if numbers else 50
     transcript_list = []
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
-
     base_url = "https://discord.com/channels/{}/{}/".format(ctx.guild.id, ctx.channel.id)
 
     if is_time_mode:
@@ -157,7 +200,6 @@ async def fetch_history(ctx, args):
             transcript_list.append("USER: {} | LINK: {}{} | MSG: {}".format(msg.author.display_name, base_url, msg.id, msg.content))
             if len(transcript_list) >= value: break
         transcript_list.reverse()
-    
     return transcript_list
 
 @bot.command(name="tldr")
@@ -166,13 +208,7 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     full_transcript = "\n".join(transcript)
-    prompt = """
-    Summarize this Discord transcript. Group by user.
-    For each user's summary points, use the provided LINKs in the transcript to create a Masked Link [Jump to Message](URL) next to their most significant contributions.
-    
-    TRANSCRIPT:
-    {}
-    """.format(full_transcript)
+    prompt = "Summarize this Discord transcript grouped by user. Use [Jump to Message](URL) for significant posts.\n\nTRANSCRIPT:\n{}".format(full_transcript)
     await process_ai_request(ctx, prompt, "Summary")
 
 @bot.command(name="arguments")
@@ -186,18 +222,17 @@ async def arguments(ctx, *, args: str = "50"):
     Analyze the following Discord transcript for disagreements.
     
     # CONFLICT SUMMARY
-    Briefly list each argument found. State who was involved and the core disagreement. 
-    Do NOT include links in this section.
+    Briefly list each argument found. State who was involved.
 
     # KEY POINTS
-    Break down Side A and Side B using bullet points.
-    For every major point raised, you MUST use the corresponding LINK from the transcript to create a masked link: [Context](URL).
+    Side A vs Side B. Use [Context](URL) links for major points.
 
     # VERDICT
-    Analyze who is logically or factually 'more right'.
+    Analyze who is logically 'more right'.
 
     # MOGG RATING
-    Assess if anyone in the conversation has been 'mogged'.
+    State clearly who mogged who. 
+    Use the format: "WINNER: [Name] | LOSER: [Name]" if a clear mogging occurred.
 
     RULES:
     - Use '---SPLIT---' to separate these 4 sections.
@@ -206,9 +241,9 @@ async def arguments(ctx, *, args: str = "50"):
     TRANSCRIPT:
     {}
     """.format(full_transcript)
-    await process_ai_request(ctx, prompt, "Argument Analysis")
+    await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
-async def process_ai_request(ctx, prompt, title_prefix):
+async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
     async with ctx.typing():
         response = None
         used_model = ""
@@ -221,8 +256,7 @@ async def process_ai_request(ctx, prompt, title_prefix):
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
                     break 
-                except Exception:
-                    continue
+                except Exception: continue
             if response: break
 
         if not response:
@@ -232,6 +266,24 @@ async def process_ai_request(ctx, prompt, title_prefix):
         
         raw_output = response.text
         sections = raw_output.split("---SPLIT---")
+
+        # Handle Stats Update (Internal Parsing)
+        if update_stats:
+            mogg_section = sections[-1] if len(sections) >= 4 else ""
+            match = re.search(r"WINNER:\s*(.*?)\s*\|\s*LOSER:\s*(.*)", mogg_section, re.IGNORECASE)
+            if match:
+                winner = match.group(1).strip()
+                loser = match.group(2).strip()
+                data = load_mogg_data()
+                
+                for p in [winner, loser]:
+                    if p not in data: data[p] = {"wins": 0, "losses": 0}
+                
+                data[winner]["wins"] += 1
+                data[loser]["losses"] += 1
+                save_mogg_data(data)
+                log_info("Moggboard Updated: {} > {}".format(winner, loser))
+
         for section in sections:
             content = section.strip()
             if content:
