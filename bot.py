@@ -56,9 +56,19 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
 
+# Global variable to track if we are waiting for a post-update message
+is_restarting_from_update = False
+
 @bot.event
 async def on_ready():
-    log_info("--- ONLINE ---")
+    log_info("--- {} ONLINE ---".format(bot.user.name))
+    if ADMIN_IDS:
+        try:
+            admin = await bot.fetch_user(ADMIN_IDS[0])
+            # This triggers on every boot, serving as your "Update Completed" signal
+            await admin.send("✅ **Update Completed:** The bot is back online and running.")
+        except Exception as e:
+            log_info("Could not send boot notification.")
 
 # --- COMMANDS ---
 
@@ -82,6 +92,7 @@ async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.**")
     await ctx.send("🔄 **Update Triggered.** Restarting...")
+    # sys.exit(0) relies on your Docker 'restart: always' policy to bring it back up
     sys.exit(0)
 
 @bot.command(name="keystatus")
@@ -108,7 +119,6 @@ async def fetch_history(ctx, args):
     transcript_list = []
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
-    # Base URL for masked links
     base_url = "https://discord.com/channels/{}/{}/".format(ctx.guild.id, ctx.channel.id)
 
     if is_time_mode:
@@ -133,8 +143,7 @@ async def tldr(ctx, *, args: str = "50"):
     full_transcript = "\n".join(transcript)
     prompt = """
     Summarize this Discord transcript. Group by user.
-    For each user, provide a list of their main points.
-    IMPORTANT: You will see 'LINK: [URL]' in the transcript. Use this to create a Masked Link [Jump to Message](URL) for the most important point they made.
+    For each user's summary points, use the provided LINKs in the transcript to create a Masked Link [Jump to Message](URL) next to their most significant contributions.
     
     TRANSCRIPT:
     {}
@@ -151,18 +160,19 @@ async def arguments(ctx, *, args: str = "50"):
     prompt = """
     Analyze the following Discord transcript for disagreements.
     
-    1. CONFLICT SUMMARY:
-       List each argument found. State who was involved and the core disagreement.
-       Use the provided LINKs in the transcript to include a [View Context](URL) link for each argument.
+    1. # CONFLICT SUMMARY
+       Briefly list each argument found. State who was involved and the core disagreement. 
+       Do NOT include links in this section.
 
-    2. KEY POINTS:
-       Break down Side A and Side B using bullet points and **bolding**.
+    2. # KEY POINTS
+       Break down Side A and Side B using bullet points.
+       For every major point raised, you MUST use the corresponding LINK from the transcript to create a masked link: [Context](URL).
 
-    3. VERDICT:
+    3. # VERDICT
        Analyze who is logically or factually 'more right'.
 
-    4. MOGG RATING:
-       Assess if anyone in the conversation has been 'mogged' (dominated or significantly outclassed in the debate) as used in online culture. If so, describe who mogged whom and why.
+    4. # MOGG RATING
+       Assess if anyone in the conversation has been 'mogged'.
 
     RULES:
     - Use '---SPLIT---' to separate these 4 sections.
