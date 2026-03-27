@@ -67,26 +67,32 @@ async def on_ready():
         except Exception as e:
             log_info(f"Could not send boot notification: {e}")
 
-# --- HELP COMMAND ---
+# --- COMMANDS ---
+
 @bot.command(name="help")
 async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
-        "* **!tldr [val]** - Summarize chat (e.g. `!tldr 50` or `!tldr 1hr`).\n"
-        "* **!arguments [val]** - Analyze conflicts in chat history.\n"
-        "* **!keystatus** - Check AI API key health.\n"
-        "* **!help** - Shows this message.\n\n"
+        "* **!tldr [val]**\n"
+        "  Summarizes recent activity. Examples: `!tldr 50`, `!tldr 1hr`.\n\n"
+        "* **!arguments [val]**\n"
+        "  Analyzes conflicts, creates a stance table, and provides a verdict.\n\n"
+        "* **!keystatus**\n"
+        "  Check the health and quota of the AI API keys.\n\n"
+        "* **!help**\n"
+        "  Shows this message.\n\n"
         "**👑 Admin Only**\n"
-        "* **!update** - Pulls latest code and restarts."
+        "* **!update**\n"
+        "  Pulls latest code from GitHub and restarts the bot."
     )
     await ctx.send(help_text)
 
-# --- ADMIN / UTILITY ---
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.**")
-    await ctx.send("🔄 **Update Triggered.** Restarting...")
+    await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting...")
+    log_info(f"Update initiated by {ctx.author.display_name}. Exiting...")
     sys.exit(0)
 
 @bot.command(name="keystatus")
@@ -101,6 +107,7 @@ async def keystatus(ctx):
     await ctx.send(msg)
 
 # --- CORE LOGIC ---
+
 async def get_ai_response_async(model, prompt):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
@@ -124,23 +131,38 @@ async def fetch_history(ctx, args):
             if len(transcript_list) >= value: break
         transcript_list.reverse()
     
-    return transcript_list, value, is_time_mode
+    return transcript_list
 
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
-    transcript, val, is_time = await fetch_history(ctx, args)
+    transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
-    prompt = f"Summarize this Discord transcript grouped by user. Use __Nickname__, bullet points, NO bolding, and '---SPLIT---' between users.\n\nTRANSCRIPT:\n" + "\n".join(transcript)
+    # FIX: Join outside the f-string
+    full_transcript = "\n".join(transcript)
+    prompt = f"""
+    Summarize this Discord transcript grouped by user.
+    STRICT FORMATTING RULES:
+    1. Start each user section with the name underlined like this: __Nickname__
+    2. DO NOT put spaces between the underscores and the name.
+    3. Use bullet points (*) for details.
+    4. DO NOT use bolding (**) anywhere.
+    5. Use '---SPLIT---' between different users.
+    
+    TRANSCRIPT:
+    {full_transcript}
+    """
     await process_ai_request(ctx, prompt, "Summary")
 
 @bot.command(name="arguments")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def arguments(ctx, *, args: str = "50"):
-    transcript, val, is_time = await fetch_history(ctx, args)
+    transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
 
+    # FIX: Join outside the f-string
+    full_transcript = "\n".join(transcript)
     prompt = f"""
     Analyze the following Discord transcript for arguments or disagreements.
     
@@ -154,7 +176,7 @@ async def arguments(ctx, *, args: str = "50"):
     Use '---SPLIT---' to separate logical sections.
     
     TRANSCRIPT:
-    {"\n".join(transcript)}
+    {full_transcript}
     """
     await process_ai_request(ctx, prompt, "Argument Analysis")
 
@@ -162,6 +184,8 @@ async def process_ai_request(ctx, prompt, title_prefix):
     async with ctx.typing():
         response = None
         used_model = ""
+        used_key_num = 0
+
         for model_name in MODEL_CHAIN:
             for i in range(len(ALL_KEYS)):
                 if i in exhausted_tracker.get(model_name, []): continue
@@ -170,6 +194,7 @@ async def process_ai_request(ctx, prompt, title_prefix):
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
+                    used_key_num = i + 1
                     break 
                 except (exceptions.ResourceExhausted, exceptions.InternalServerError):
                     if model_name not in exhausted_tracker: exhausted_tracker[model_name] = []
@@ -181,7 +206,7 @@ async def process_ai_request(ctx, prompt, title_prefix):
             exhausted_tracker.clear()
             return await ctx.send("🔄 Quotas hit. Try again in a moment.")
 
-        header = f"### {title_prefix} for {ctx.author.mention}\n> **Model:** {used_model}"
+        header = f"### {title_prefix} for {ctx.author.mention}\n> **Model:** {used_model} | **Key:** #{used_key_num}"
         await ctx.send(header)
         
         clean_text = response.text.replace("**", "")
@@ -191,9 +216,10 @@ async def process_ai_request(ctx, prompt, title_prefix):
         for section in sections:
             content = section.strip()
             if content:
-                # Split by 2000 chars if too long
-                for i in range(0, len(content), 1900):
-                    await ctx.send(content[i:i+1900])
+                for j in range(0, len(content), 1900):
+                    await ctx.send(content[j:j+1900])
 
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
+else:
+    log_info("CRITICAL: No token found in discordtoken.txt")
