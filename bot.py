@@ -5,9 +5,10 @@ from google.api_core import exceptions
 import re, asyncio, functools, sys, os, json, logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.7 📋✨"
+BOT_VERSION = "v3.9 ⚡📺"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -119,6 +120,8 @@ async def help_command(ctx):
         "  Shows the current build version.\n\n"
         "* **!tldr [amount]**\n"
         "  Summaries + **Cortisol Spike** detection.\n\n"
+        "* **!tldw (as a reply)**\n"
+        "  Summarizes a YouTube video transcript into a single paragraph.\n\n"
         "* **!arguments [amount]**\n"
         "  Conflict Analysis and Mogg updates.\n\n"
         "* **!moggboard**\n"
@@ -225,6 +228,44 @@ async def tldr(ctx, *, args: str = "50"):
     prompt = f"Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
+@bot.command(name="tldw")
+@commands.cooldown(1, 60, commands.BucketType.user)
+async def tldw(ctx):
+    if not ctx.message.reference:
+        return await ctx.send("❌ Please **reply** to a message containing a YouTube link with `!tldw`.")
+
+    try:
+        replied_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        yt_regex = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
+        match = re.search(yt_regex, replied_msg.content)
+        
+        if not match:
+            return await ctx.send("❌ No valid YouTube URL found in that message.")
+        
+        video_id = match.group(1)
+        await ctx.message.add_reaction("⏳")
+
+        async with ctx.typing():
+            try:
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                full_text = " ".join([i['text'] for i in transcript_list])
+            except Exception as e:
+                return await ctx.send("❌ Could not fetch transcript: Video might not have captions enabled.")
+
+            prompt = (
+                f"Summarize the following YouTube video transcript into a single, "
+                f"informative paragraph. Focus on the core message and key takeaways. "
+                f"Keep it professional and concise.\n\nTRANSCRIPT:\n{full_text[:50000]}"
+            )
+            
+            # Explicitly use Flash-first chain for TLDW
+            flash_chain = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview']
+            await process_ai_request(ctx, prompt, "Video Summary (TL;DW)", update_stats=False, custom_chain=flash_chain)
+
+    except Exception as e:
+        log_info(f"TLDW Error: {e}")
+        await ctx.send("⚠️ An unexpected error occurred while processing the video.")
+
 @bot.command(name="arguments")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def arguments(ctx, *, args: str = "50"):
@@ -236,12 +277,14 @@ async def arguments(ctx, *, args: str = "50"):
     prompt = f"Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
-async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
+async def process_ai_request(ctx, prompt, title_prefix, update_stats=False, custom_chain=None):
     async with ctx.typing():
         response = None
         used_model = ""
         now = datetime.now()
-        for model_name in MODEL_CHAIN:
+        chain = custom_chain if custom_chain else MODEL_CHAIN
+        
+        for model_name in chain:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i in range(len(ALL_KEYS)):
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
@@ -262,6 +305,7 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
                 except Exception as e:
                     log_info(f"Error: {e}"); continue
             if response: break
+            
         if not response: return await ctx.send("🔄 Quotas Exhausted.")
         await ctx.send(f"### {title_prefix} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
