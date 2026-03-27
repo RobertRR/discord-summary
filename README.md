@@ -15,7 +15,18 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations usin
 
 ---
 
-## 📋 Requirements
+## 🛠 Commands
+
+| Command | Description | Access |
+| :--- | :--- | :--- |
+| `!help` | Displays the help menu and command list. | Everyone |
+| `!tldr [val]` | Summarizes chat history. Supports message counts (`!tldr 50`) or time (`!tldr 30 mins`, `!tldr 2hr`). | Everyone |
+| `!keystatus` | Shows the current health and quota status of all configured Gemini API keys. | Everyone |
+| `!update` | **(Admin Only)** Triggers the bot to pull the latest `bot.py` from GitHub and restart the container. | **Admins** |
+
+
+
+## 📋 Deployment and Setup
 
 ### 1. Discord Bot Setup
 1.  Go to the [Discord Developer Portal](https://discord.com/developers/applications).
@@ -45,17 +56,6 @@ On your host machine (e.g., Debian), create a project folder (e.g., `/projects/d
 ## 🚀 Deployment
 
 Create a `docker-compose.yml` file in your project folder using the compose.yaml file in this project and start the container.
-
-
-## 🛠 Commands
-
-| Command | Description | Access |
-| :--- | :--- | :--- |
-| `!help` | Displays the help menu and command list. | Everyone |
-| `!tldr [val]` | Summarizes chat history. Supports counts (`!tldr 50`) or time (`!tldr 30min`, `!tldr 2hr`). | Everyone |
-| `!keystatus` | Shows the current health and quota status of all configured Gemini API keys. | Everyone |
-| `!update` | **(Admin Only)** Triggers the bot to pull the latest `bot.py` from GitHub and restart the container. | **Admins** |
-
 
 ## ⚙️ Health & Updates
 
