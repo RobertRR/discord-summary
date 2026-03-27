@@ -39,21 +39,15 @@ def load_file(filename):
 
 def load_mogg_data():
     path = os.path.join(os.getcwd(), "mogg_stats.json")
-    # If file doesn't exist, start fresh
     if not os.path.exists(path):
         return {}
-    
     try:
         with open(path, "r") as f:
-            # Read everything
             raw_content = f.read().strip()
-            # If the file is empty or just whitespace, return empty dict
             if not raw_content:
                 return {}
-            # Try to parse the string
             return json.loads(raw_content)
     except Exception as e:
-        # This catches JSONDecodeError, FileNotFoundError, etc.
         log_info("Mogg Data Error: {}. Returning empty dictionary.".format(e))
         return {}
 
@@ -128,15 +122,15 @@ async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
         "* **!tldr [amount]**\n"
-        "  Summarizes activity with jump-links.\n\n"
+        "  Summarizes activity with jump-links to messages.\n\n"
         "* **!arguments [amount]**\n"
-        "  Analyzes conflicts and updates the Moggboard.\n\n"
+        "  Analyzes conflicts, settles verdicts, and updates the Moggboard.\n\n"
         "* **!moggboard**\n"
-        "  View the server power rankings.\n\n"
+        "  View the server's competitive power rankings.\n\n"
         "* **!keystatus**\n"
         "  Check AI API key health.\n\n"
         "* **!update**\n"
-        "  **(Admin)** Pulls code and restarts."
+        "  **(Admin)** Pulls latest code and restarts."
     )
     await ctx.send(help_text)
 
@@ -146,15 +140,15 @@ async def moggboard(ctx):
     if not data:
         return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
 
+    # Sorting: Primary = Ratio, Secondary = Wins
     sorted_users = sorted(
         data.items(), 
         key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), 
         reverse=True
     )
 
-    msg = "## 🏆 THE OFFICIAL MOGGBOARD\n"
-    msg += "| Rank | User | Wins | Losses | Ratio | Class |\n"
-    msg += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+    msg = "## 👑 THE OFFICIAL MOGGBOARD\n"
+    msg += "Tracking the server's dominance hierarchy.\n\n"
 
     for i, (user_name, stats) in enumerate(sorted_users, 1):
         w = stats['wins']
@@ -164,7 +158,15 @@ async def moggboard(ctx):
         rank_class = get_rank_class(ratio)
         ratio_pct = "{:.1f}%".format(ratio * 100)
         
-        msg += "| #{} | **{}** | {} | {} | {} | *{}* |\n".format(i, user_name, w, l, ratio_pct, rank_class)
+        # Emoji for the top 3
+        medal = ""
+        if i == 1: medal = "🥇 "
+        elif i == 2: medal = "🥈 "
+        elif i == 3: medal = "🥉 "
+
+        msg += "**{}{} {}**\n".format(medal, i, user_name)
+        msg += "> **Class:** `{}` | **Ratio:** `{}`\n".format(rank_class, ratio_pct)
+        msg += "> **Stats:** `{}W - {}L` (Total: {})\n\n".format(w, l, total)
 
     await ctx.send(msg)
 
@@ -285,14 +287,12 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
         raw_output = response.text
         sections = raw_output.split("---SPLIT---")
 
-        # Handle Stats Update (Internal Parsing)
         if update_stats:
             mogg_section = sections[-1] if len(sections) >= 4 else ""
             match = re.search(r"WINNER:\s*(.*?)\s*\|\s*LOSER:\s*(.*)", mogg_section, re.IGNORECASE)
             if match:
                 winner = match.group(1).strip()
                 loser = match.group(2).strip()
-                # CALLING LOAD_MOGG_DATA
                 data = load_mogg_data()
                 
                 for p in [winner, loser]:
