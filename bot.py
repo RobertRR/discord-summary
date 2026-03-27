@@ -37,38 +37,39 @@ def load_file(filename):
         log_info("CRITICAL: {} not found in {}".format(filename, os.getcwd()))
         return []
 
-def load_mogg_data():
-    path = os.path.join(os.getcwd(), "mogg_stats.json")
-    if not os.path.exists(path):
-        return {}
+def load_json_data(filename):
+    path = os.path.join(os.getcwd(), filename)
+    if not os.path.exists(path): return {}
     try:
         with open(path, "r") as f:
-            raw_content = f.read().strip()
-            if not raw_content:
-                return {}
-            return json.loads(raw_content)
-    except Exception as e:
-        log_info("Mogg Data Error: {}. Returning empty dictionary.".format(e))
-        return {}
+            content = f.read().strip()
+            return json.loads(content) if content else {}
+    except: return {}
 
-def save_mogg_data(data):
-    path = os.path.join(os.getcwd(), "mogg_stats.json")
+def save_json_data(filename, data):
+    path = os.path.join(os.getcwd(), filename)
     try:
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
-            f.flush()
-            os.fsync(f.fileno())
     except Exception as e:
-        log_info("Failed to save mogg_stats.json: {}".format(e))
+        log_info("Failed to save {}: {}".format(filename, e))
 
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
-# --- API KEY MANAGER ---
-# Structure: { model_name: { key_index: expiry_datetime } }
-exhausted_tracker = {}
+# --- API & QUOTA CONFIG ---
+exhausted_tracker = {} # { model: { key_index: expiry_dt } }
+MODEL_CHAIN = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
+
+# Estimated Daily Limits for Free Tier Preview Models
+DAILY_LIMITS = {
+    'gemini-3.1-pro-preview': 5,
+    'gemini-3-flash-preview': 50,
+    'gemini-2.5-flash': 20,
+    'gemini-3.1-flash-lite-preview': 100
+}
 
 def configure_genai(key_index):
     genai.configure(api_key=ALL_KEYS[key_index])
@@ -76,13 +77,27 @@ def configure_genai(key_index):
 if ALL_KEYS:
     configure_genai(0)
 
-MODEL_CHAIN = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
+
+# --- HELPERS ---
+def get_daily_usage():
+    today = datetime.now().strftime('%Y-%m-%d')
+    data = load_json_data("usage_stats.json")
+    if today not in data:
+        data[today] = {m: 0 for m in MODEL_CHAIN}
+        save_json_data("usage_stats.json", data)
+    return data[today]
+
+def increment_usage(model):
+    today = datetime.now().strftime('%Y-%m-%d')
+    data = load_json_data("usage_stats.json")
+    if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
+    data[today][model] = data[today].get(model, 0) + 1
+    save_json_data("usage_stats.json", data)
 
 @bot.event
 async def on_ready():
@@ -98,24 +113,9 @@ async def on_ready():
                     channel = bot.get_channel(channel_id)
                     if channel:
                         await channel.send("✅ **Update Completed:** The bot is back online.")
-        except Exception as e:
-            log_info("Failed to post update message: {}".format(e))
+        except: pass
         finally:
-            if os.path.exists(update_file):
-                os.remove(update_file)
-
-# --- RANKING LOGIC ---
-def get_rank_class(ratio):
-    r = ratio * 100
-    if r >= 99.5: return "Immortal"
-    if r >= 90: return "Divine"
-    if r >= 75: return "Ancient"
-    if r >= 55: return "Legend"
-    if r >= 40: return "Archon"
-    if r >= 30: return "Crusader"
-    if r >= 15: return "Guardian"
-    if r > 0: return "Herald"
-    return "Unranked"
+            if os.path.exists(update_file): os.remove(update_file)
 
 # --- COMMANDS ---
 
@@ -132,7 +132,7 @@ async def help_command(ctx):
         "* **!clearmogs**\n"
         "  **(Admin)** Resets all Moggboard statistics.\n\n"
         "* **!keystatus**\n"
-        "  Check AI API key health and cooldowns.\n\n"
+        "  Check API health, cooldowns, and daily quotas.\n\n"
         "* **!update**\n"
         "  **(Admin)** Pulls latest code and restarts."
     )
@@ -140,91 +140,61 @@ async def help_command(ctx):
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
-    data = load_mogg_data()
-    if not data:
-        return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
-
-    sorted_users = sorted(
-        data.items(), 
-        key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), 
-        reverse=True
-    )
-
+    data = load_json_data("mogg_stats.json")
+    if not data: return await ctx.send("The Moggboard is empty.")
+    sorted_users = sorted(data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
     msg = "## 👑 THE OFFICIAL MOGGBOARD\n"
-    msg += "Tracking the server's dominance hierarchy.\n\n"
-
-    for i, (user_name, stats) in enumerate(sorted_users, 1):
-        w = stats['wins']
-        l = stats['losses']
-        total = w + l
-        ratio = w / total if total > 0 else 0
-        rank_class = get_rank_class(ratio)
-        ratio_pct = "{:.1f}%".format(ratio * 100)
-        
-        medal = ""
-        if i == 1: medal = "🥇"
-        elif i == 2: medal = "🥈"
-        elif i == 3: medal = "🥉"
-
-        msg += "{}. **{}** {}\n".format(i, user_name, medal)
-        msg += "> **Class:** `{}` | **Ratio:** `{}` | **Stats:** `{}W - {}L`\n\n".format(rank_class, ratio_pct, w, l)
-
+    for i, (user, stats) in enumerate(sorted_users, 1):
+        w, l = stats['wins'], stats['losses']
+        ratio = (w / (w+l) if (w+l)>0 else 0) * 100
+        medal = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else ""
+        msg += "{}. **{}** {}\n> `{}W - {}L` ({:.1f}%)\n".format(i, user, medal, w, l, ratio)
     await ctx.send(msg)
 
 @bot.command(name="clearmogs")
 async def clearmogs(ctx):
-    if ctx.author.id not in ADMIN_IDS:
-        return await ctx.send("⛔ **Access Denied.** Admins only.")
-    
-    save_mogg_data({})
-    log_info("Moggboard reset by {}".format(ctx.author.display_name))
-    await ctx.send("🗑️ **Moggboard Reset.** All stats have been wiped.")
-
-@bot.command(name="update")
-async def update(ctx):
-    if ctx.author.id not in ADMIN_IDS:
-        return await ctx.send("⛔ **Access Denied.**")
-    await ctx.send("🔄 **Update Triggered.** Restarting...")
-    update_file = os.path.join(os.getcwd(), "update_channel.txt")
-    try:
-        with open(update_file, "w") as f:
-            f.write(str(ctx.channel.id))
-            f.flush()
-            os.fsync(f.fileno())
-    except: pass
-    sys.exit(0)
+    if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Admin only.")
+    save_json_data("mogg_stats.json", {})
+    await ctx.send("🗑️ Moggboard Reset.")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
     now = datetime.now()
-    msg = "### 🔑 API Key Status\n"
+    usage = get_daily_usage()
+    msg = "### 🔑 API Key & Quota Status\n"
     
-    anything_exhausted = False
     for model in MODEL_CHAIN:
-        # Clean up expired cooldowns
+        # 1. Rate Limit Check (Per Minute)
         if model in exhausted_tracker:
             exhausted_tracker[model] = {k: v for k, v in exhausted_tracker[model].items() if v > now}
         
-        exhausted_keys = exhausted_tracker.get(model, {})
-        dead_count = len(exhausted_keys)
+        dead_count = len(exhausted_tracker.get(model, {}))
         available = len(ALL_KEYS) - dead_count
         
-        msg += "* **{}:** {}/{} Keys Available\n".format(model, available, len(ALL_KEYS))
+        # 2. Daily Limit Check (Per Day Total)
+        used = usage.get(model, 0)
+        total_limit = DAILY_LIMITS.get(model, 0) * len(ALL_KEYS)
+        remaining = max(0, total_limit - used)
+        
+        msg += "* **{}**\n".format(model)
+        msg += "  └ Rate: `{}/{}` keys ready".format(available, len(ALL_KEYS))
         
         if dead_count > 0:
-            anything_exhausted = True
-            # Find the key that will be available the soonest
-            next_available = min(exhausted_keys.values())
-            wait_time = int((next_available - now).total_seconds())
-            msg += "  └ ⏳ Next key available in: `{}s`\n".format(wait_time)
+            next_up = min(exhausted_tracker[model].values())
+            msg += " (Wait: `{}s`)".format(int((next_up - now).total_seconds()))
+            
+        msg += "\n  └ Daily: `{}/{}` used (Est. `{}` left today)\n".format(used, total_limit, remaining)
 
-    if not anything_exhausted:
-        await ctx.send("✅ **All keys are fresh.** Systems nominal.")
-    else:
-        await ctx.send(msg)
+    await ctx.send(msg)
+
+@bot.command(name="update")
+async def update(ctx):
+    if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Access Denied.")
+    await ctx.send("🔄 Restarting...")
+    with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
+    sys.exit(0)
 
 # --- CORE LOGIC ---
-
 async def get_ai_response_async(model, prompt):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
@@ -257,8 +227,7 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    full_transcript = "\n".join(transcript)
-    prompt = "Summarize this Discord transcript grouped by user. Use [Jump to Message](URL) for significant posts.\n\nTRANSCRIPT:\n{}".format(full_transcript)
+    prompt = "Summarize this Discord transcript grouped by user. Use [Jump to Message](URL) for significant posts.\n\nTRANSCRIPT:\n{}".format("\n".join(transcript))
     await process_ai_request(ctx, prompt, "Summary")
 
 @bot.command(name="arguments")
@@ -268,31 +237,9 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    full_transcript = "\n".join(transcript)
-    
-    prompt = """
-    Analyze the following Discord transcript for disagreements.
-    
-    # CONFLICT SUMMARY
-    Briefly list each argument found. State who was involved.
-
-    # KEY POINTS
-    Side A vs Side B. Use [Context](URL) links for major points.
-
-    # VERDICT
-    Analyze who is logically 'more right'.
-
-    # MOGG RATING
-    State clearly who mogged who. 
-    Use the format: "WINNER: [Name] | LOSER: [Name]" if a clear mogging occurred.
-
-    RULES:
-    - Use '---SPLIT---' to separate these 4 sections.
-    - If no argument exists, say 'Everybody is too busy working hard (lmao).'.
-    
-    TRANSCRIPT:
-    {}
-    """.format(full_transcript)
+    prompt = """Analyze the following transcript for arguments. Use '---SPLIT---' between these 4 sections: 
+    1. Conflict Summary 2. Key Points 3. Verdict 4. Mogg Rating (WINNER: [Name] | LOSER: [Name]).
+    If no argument, say 'Everybody is too busy working hard (lmao).'.\n\nTRANSCRIPT:\n{}""".format("\n".join(transcript))
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
@@ -302,64 +249,42 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
         now = datetime.now()
 
         for model_name in MODEL_CHAIN:
-            if model_name not in exhausted_tracker:
-                exhausted_tracker[model_name] = {}
-
+            if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i in range(len(ALL_KEYS)):
-                # Check if this specific key is currently in cooldown for this model
-                if i in exhausted_tracker[model_name]:
-                    if now < exhausted_tracker[model_name][i]:
-                        continue
-                    else:
-                        # Cooldown finished, remove from tracker
-                        del exhausted_tracker[model_name][i]
-
+                if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
                     configure_genai(i)
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
+                    increment_usage(model_name) # SUCCESSFUL CALL LOGGED
                     break 
                 except exceptions.ResourceExhausted:
-                    # Mark key as exhausted for 60 seconds (standard free tier reset)
                     exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
-                    log_info("Key #{} exhausted for {}. Cool-down initiated.".format(i, model_name))
                     continue
                 except Exception as e:
-                    log_info("Non-quota error with Key #{} on {}: {}".format(i, model_name, e))
+                    log_info("Key #{} error: {}".format(i, e))
                     continue
-            
             if response: break
 
-        if not response:
-            return await ctx.send("🔄 **All Quotas Exhausted.** Try again in a minute or add more keys.")
+        if not response: return await ctx.send("🔄 All Quotas Exhausted.")
 
         await ctx.send("### {} for {}\n> **Model:** `{}`".format(title_prefix, ctx.author.mention, used_model))
-        
-        raw_output = response.text
-        sections = raw_output.split("---SPLIT---")
+        sections = response.text.split("---SPLIT---")
 
         if update_stats:
-            mogg_section = sections[-1] if len(sections) >= 4 else ""
-            match = re.search(r"WINNER:\s*(.*?)\s*\|\s*LOSER:\s*(.*)", mogg_section, re.IGNORECASE)
+            match = re.search(r"WINNER:\s*(.*?)\s*\|\s*LOSER:\s*(.*)", sections[-1] if len(sections)>=4 else "", re.IGNORECASE)
             if match:
-                winner = match.group(1).strip()
-                loser = match.group(2).strip()
-                data = load_mogg_data()
-                
-                for p in [winner, loser]:
-                    if p not in data: data[p] = {"wins": 0, "losses": 0}
-                
-                data[winner]["wins"] += 1
-                data[loser]["losses"] += 1
-                save_mogg_data(data)
-                log_info("Moggboard Updated: {} > {}".format(winner, loser))
+                w, l = match.group(1).strip(), match.group(2).strip()
+                data = load_json_data("mogg_stats.json")
+                for p in [w, l]: 
+                    if p not in data: data[p] = {"wins":0, "losses":0}
+                data[w]["wins"] += 1; data[l]["losses"] += 1
+                save_json_data("mogg_stats.json", data)
 
-        for section in sections:
-            content = section.strip()
+        for s in sections:
+            content = s.strip()
             if content:
-                for j in range(0, len(content), 1900):
-                    await ctx.send(content[j:j+1900])
+                for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
 
-if DISCORD_TOKEN:
-    bot.run(DISCORD_TOKEN)
+if DISCORD_TOKEN: bot.run(DISCORD_TOKEN)
