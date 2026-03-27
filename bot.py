@@ -57,10 +57,8 @@ async def keystatus(ctx):
         msg += f"* **{model}:** {len(ALL_KEYS)-dead}/{len(ALL_KEYS)} Keys Available\n"
     await ctx.send(msg)
 
-# Helper function to run the blocking Gemini call in a separate thread
 async def get_summary_async(model, prompt):
     loop = asyncio.get_running_loop()
-    # This keeps the Discord loop moving while Gemini thinks
     return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
 
 @bot.command(name="tldr")
@@ -91,15 +89,16 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
+        # REFINED PROMPT: Harder stance on formatting
         prompt = f"""
-        Summarize this Discord transcript.
+        Summarize this Discord transcript grouped by user.
         
         STRICT FORMATTING RULES:
-        1. Group the summary BY USER.
-        2. Use the exact header format: __Nickname__
-        3. Use bullet points (*) for their specific actions or points.
-        4. ABSOLUTELY NO BOLDING (**) in the output.
-        5. Separate each user block with the exact text: ---SPLIT---
+        1. Start each user section with the name underlined like this: __Nickname__
+        2. DO NOT put spaces between the underscores and the name.
+        3. Use bullet points (*) for details.
+        4. DO NOT use bolding (**) anywhere.
+        5. Use '---SPLIT---' between different users.
         
         TRANSCRIPT:
         {"\n".join(transcript_list)}
@@ -117,7 +116,6 @@ async def tldr(ctx, *, args: str = "50"):
                     try:
                         configure_genai(i)
                         current_model = genai.GenerativeModel(model_name)
-                        # FIXED: Now uses the async helper to prevent loop freezing
                         response = await get_summary_async(current_model, prompt)
                         used_model = model_name
                         used_key_num = i + 1
@@ -139,7 +137,11 @@ async def tldr(ctx, *, args: str = "50"):
             header = f"### Summary for {ctx.author.mention}\n> **Context:** {summary_info} | **Model:** {used_model} | **Key:** #{used_key_num}"
             await ctx.send(header)
             
+            # Post-processing: Remove all bolding and fix underline spacing
             clean_text = response.text.replace("**", "")
+            # This regex ensures __ Name __ becomes __Name__
+            clean_text = re.sub(r'__\s*(.*?)\s*__', r'__\1__', clean_text)
+            
             sections = clean_text.split("---SPLIT---")
             
             for section in sections:
