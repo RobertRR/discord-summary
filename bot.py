@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.12 - Directory Permission Audit 🛡️🔍"
+BOT_VERSION = "v3.15 - The Absolute Build 🛠️"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -31,7 +31,7 @@ def check_write_permissions():
         with open(test_file, "w") as f:
             f.write("test")
         os.remove(test_file)
-        log_info("SUCCESS: Bot has write access to the directory.")
+        log_info(f"SUCCESS: Bot has write access. Version: {BOT_VERSION}")
         return True
     except Exception as e:
         log_info(f"CRITICAL: Bot lacks write access! Error: {e}")
@@ -76,13 +76,12 @@ ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
 # --- API & QUOTA CONFIG ---
 exhausted_tracker = {} 
-MODEL_CHAIN = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
+MODEL_CHAIN = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']
 
 DAILY_LIMITS = {
-    'gemini-3.1-pro-preview': 5,
-    'gemini-3-flash-preview': 50,
-    'gemini-2.5-flash': 20,
-    'gemini-3.1-flash-lite-preview': 100
+    'gemini-1.5-pro': 5,
+    'gemini-1.5-flash': 50,
+    'gemini-1.5-flash-8b': 100
 }
 
 def configure_genai(key_index):
@@ -100,9 +99,6 @@ bot.remove_command('help')
 @bot.event
 async def on_ready():
     log_info(f"--- {bot.user.name} ONLINE (Version {BOT_VERSION}) ---")
-    if not has_write_access:
-        log_info("WARNING: The bot will likely fail to self-update due to permissions.")
-    
     await asyncio.sleep(5) 
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
@@ -140,7 +136,7 @@ async def help_command(ctx):
         "* **!tldr [amount]**\n"
         "  Summaries + **Cortisol Spike** detection.\n\n"
         "* **!tldw (as a reply)**\n"
-        "  Summarizes a YouTube video transcript into a single paragraph.\n\n"
+        "  Summarizes a YouTube video transcript.\n\n"
         "* **!arguments [amount]**\n"
         "  Conflict Analysis and Mogg updates.\n\n"
         "* **!moggboard**\n"
@@ -208,15 +204,14 @@ async def keystatus(ctx):
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Access Denied.")
-    await ctx.send("🔄 Deleting local script and pulling fresh code...")
-    
+    await ctx.send("🔄 Cleaning local script and forcing container recycle...")
     try:
         script_path = os.path.join(os.getcwd(), "bot.py")
         if os.path.exists(script_path):
+            with open(script_path, 'w') as f: f.write("")
             os.remove(script_path)
     except Exception as e:
-        log_info(f"Pre-update delete failed: {e}")
-        
+        log_info(f"Update cleanup failed: {e}")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
@@ -260,44 +255,28 @@ async def tldr(ctx, *, args: str = "50"):
 async def tldw(ctx):
     if not ctx.message.reference:
         return await ctx.send("❌ Please **reply** to a message containing a YouTube link with `!tldw`.")
-
     try:
         replied_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
         yt_regex = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
         match = re.search(yt_regex, replied_msg.content)
-        
-        if not match:
-            return await ctx.send("❌ No valid YouTube URL found in that message.")
-        
+        if not match: return await ctx.send("❌ No valid YouTube URL found.")
         video_id = match.group(1)
         await ctx.message.add_reaction("⏳")
-
         async with ctx.typing():
-            full_text = ""
             try:
-                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                try:
-                    transcript_data = transcript_list.find_transcript(['en']).fetch()
-                except:
-                    transcript_data = transcript_list.find_generated_transcript(['en']).fetch()
-                
+                # Proper method for youtube_transcript_api v3.15
+                transcript_data = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-GB'])
                 full_text = " ".join([i['text'] for i in transcript_data])
             except Exception as e:
                 log_info(f"Transcript fetch failed: {e}")
-                return await ctx.send("❌ Could not fetch transcript: Video might not have captions enabled or they are blocked.")
-
-            prompt = (
-                f"Summarize the following YouTube video transcript into a single, "
-                f"informative paragraph. Focus on the core message and key takeaways. "
-                f"Keep it professional and concise.\n\nTRANSCRIPT:\n{full_text[:50000]}"
-            )
+                return await ctx.send(f"❌ Could not fetch transcript: {e}")
             
-            flash_chain = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview']
+            prompt = f"Summarize video transcript in one paragraph.\n\nTRANSCRIPT:\n{full_text[:50000]}"
+            flash_chain = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro']
             await process_ai_request(ctx, prompt, "Video Summary (TL;DW)", update_stats=False, custom_chain=flash_chain)
-
     except Exception as e:
         log_info(f"TLDW Error: {e}")
-        await ctx.send("⚠️ An unexpected error occurred while processing the video.")
+        await ctx.send("⚠️ Error processing video.")
 
 @bot.command(name="arguments")
 @commands.cooldown(1, 30, commands.BucketType.channel)
@@ -307,16 +286,14 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     history_text = "\n".join(transcript)
-    prompt = f"Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"
+    prompt = f"Analyze for arguments. Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False, custom_chain=None):
     async with ctx.typing():
-        response = None
-        used_model = ""
+        response, used_model = None, ""
         now = datetime.now()
         chain = custom_chain if custom_chain else MODEL_CHAIN
-        
         for model_name in chain:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i in range(len(ALL_KEYS)):
@@ -329,16 +306,13 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False, cust
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
-                    data[today][model_name] = data[today].get(model_name, 0) + 1
+                    data[today][model_name] += 1
                     save_json_data("usage_stats.json", data)
                     break 
                 except exceptions.ResourceExhausted:
                     exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
-                    continue
-                except Exception as e:
-                    log_info(f"Error: {e}"); continue
+                except Exception as e: log_info(f"Error: {e}")
             if response: break
-            
         if not response: return await ctx.send("🔄 Quotas Exhausted.")
         await ctx.send(f"### {title_prefix} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
