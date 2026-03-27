@@ -39,22 +39,28 @@ def load_file(filename):
 
 def load_mogg_data():
     path = os.path.join(os.getcwd(), "mogg_stats.json")
-    if os.path.exists(path):
-        try:
-            # Check if file is empty
-            if os.path.getsize(path) == 0:
+    if not os.path.exists(path):
+        return {}
+    
+    try:
+        with open(path, "r") as f:
+            content = f.read().strip()
+            if not content:
                 return {}
-            with open(path, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            log_info("mogg_stats.json was corrupted. Resetting to empty.")
-            return {}
-    return {}
+            return json.loads(content)
+    except (json.JSONDecodeError, Exception) as e:
+        log_info("mogg_stats.json error: {}. Returning empty dict.".format(e))
+        return {}
 
 def save_mogg_data(data):
     path = os.path.join(os.getcwd(), "mogg_stats.json")
-    with open(path, "w") as f:
-        json.dump(data, f, indent=4)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        log_info("Failed to save mogg_stats.json: {}".format(e))
 
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
@@ -135,9 +141,10 @@ async def moggboard(ctx):
     if not data:
         return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
 
+    # Sorting logic: Ratio first, then total wins
     sorted_users = sorted(
         data.items(), 
-        key=lambda x: (x[1]['wins'], x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1)), 
+        key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), 
         reverse=True
     )
 
