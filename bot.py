@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import google.generativeai as genai
+from google.api_core import exceptions  # Added this for precise error catching
 import os
 import re
 import traceback
@@ -11,7 +12,6 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
-# Staying on 2.5-flash as requested
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 intents = discord.Intents.default()
@@ -22,7 +22,6 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 async def on_ready():
     print(f"--- BOT ONLINE ---")
     print(f"Logged in as: {bot.user}")
-    print(f"Model: Gemini 2.5 Flash")
     print(f"Sync Time: {datetime.now().strftime('%H:%M:%S')}")
     print(f"------------------")
 
@@ -38,7 +37,6 @@ async def tldr(ctx, *, args: str = "50"):
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
     try:
-        # 1. Fetching Logic
         if is_time_mode:
             delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
             summary_info = f"the last {value} {'minutes' if 'min' in raw_input else 'hours'}"
@@ -56,7 +54,6 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # 2. AI Prompt
         full_transcript_text = "\n".join(transcript_list)
         prompt = f"""
         Provide a nuanced summary of this transcript. Group by user.
@@ -68,13 +65,11 @@ async def tldr(ctx, *, args: str = "50"):
         """
 
         async with ctx.typing():
+            # Attempt AI generation
             response = model.generate_content(prompt)
             
-            # --- INTERNAL LOGGING ---
             usage = response.usage_metadata
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] TLDR SUCCESS: {summary_info}")
-            print(f" >> Tokens: P({usage.prompt_token_count}) | R({usage.candidates_token_count}) | T({usage.total_token_count})")
-            print(f"-------------------------------------------")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Tokens: {usage.total_token_count}")
 
             if not response.text:
                 raise ValueError("AI returned no content.")
@@ -88,24 +83,20 @@ async def tldr(ctx, *, args: str = "50"):
                     formatted_part = msg_part.replace(". *", ".\n*")
                     await ctx.send(formatted_part)
                     
+    # --- SPECIFIC GOOGLE ERROR CATCHING ---
+    except exceptions.ResourceExhausted as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] QUOTA EXHAUSTED: 20/20 Limit reached.")
+        await ctx.send("🛑 **Daily Limit Reached.** I've used my 20 free summaries for the day. Please try again in 24 hours!")
+    
     except Exception as e:
-        # Improved Quota/429 Error Handling
-        err_str = str(e)
-        if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] QUOTA ALERT: 20/20 Daily Limit Hit.")
-            await ctx.send("🛑 **Daily Limit Reached.** I've used my 20 free summaries for the day. Please try again in 24 hours!")
-        else:
-            print(f"CRITICAL ERROR: {err_str}")
-            traceback.print_exc()
-            await ctx.send(f"❌ Summary failed. Check the host logs for details.")
+        print(f"CRITICAL ERROR: {str(e)}")
+        traceback.print_exc()
+        await ctx.send(f"❌ Summary failed. Check the host logs.")
 
-# --- COOLDOWN ERROR HANDLER ---
 @tldr.error
 async def tldr_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         remaining = math.ceil(error.retry_after)
         await ctx.send(f"⏳ **Cooldown active.** Please wait {remaining}s.", delete_after=10)
-    else:
-        print(f"Command Error: {error}")
 
 bot.run(TOKEN)
