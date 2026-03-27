@@ -8,33 +8,36 @@ import traceback
 import math
 from datetime import datetime, timedelta
 
+# --- CONFIGURATION ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
 
 # 2026 Model Priority Chain
-# 1. 3.1 Pro (Heavy Reasoning) -> 2. 3 Flash (Fast/Smart) -> 3. 3.1 Flash-Lite (Infinite Quota)
+# If one fails or is 'Not Found', it moves to the next.
 MODEL_CHAIN = [
-    'gemini-3.1-pro-preview',      # Best Intelligence
-    'gemini-3-flash-preview',      # Fast Preview (Needs the -preview suffix!)
-    'gemini-2.5-flash',            # Reliable Middle-ground
-    'gemini-3.1-flash-lite-preview' # 2026 Workhorse (High Free-Tier Limits)
+    'gemini-3.1-pro-preview',        # Best intelligence (Tier 1)
+    'gemini-3-flash-preview',        # Balanced Speed/IQ (Tier 2) - FIXED ID
+    'gemini-2.5-flash',              # High Reliability (Tier 3)
+    'gemini-3.1-flash-lite-preview'  # High-Volume Workhorse (Tier 4)
 ]
 
+# --- BOT SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    print(f"--- BOT ONLINE ---")
+    print(f"--- {bot.user.name} ONLINE ---")
     print(f"Primary Model: {MODEL_CHAIN[0]}")
-    print(f"------------------")
+    print(f"--------------------------")
 
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
+    # Parse input for time (e.g., 1 hour) or count (e.g., 50)
     raw_input = args.lower()
     numbers = re.findall(r'\d+', raw_input)
     value = int(numbers[0]) if numbers else 50
@@ -43,7 +46,7 @@ async def tldr(ctx, *, args: str = "50"):
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
     try:
-        # 1. FETCHING DATA
+        # 1. Fetching Message History
         if is_time_mode:
             delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
             summary_info = f"the last {value} {'mins' if 'min' in raw_input else 'hours'}"
@@ -63,7 +66,7 @@ async def tldr(ctx, *, args: str = "50"):
 
         prompt = f"Summarize this Discord transcript. Group by user with bullet points:\n\n" + "\n".join(transcript_list)
 
-        # 2. THE FALLBACK LOOP (The Fix)
+        # 2. THE MULTI-MODEL FALLBACK LOOP
         async with ctx.typing():
             response = None
             used_model = ""
@@ -71,31 +74,36 @@ async def tldr(ctx, *, args: str = "50"):
             for model_name in MODEL_CHAIN:
                 try:
                     current_model = genai.GenerativeModel(model_name)
+                    # Attempt generation
                     response = current_model.generate_content(prompt)
                     used_model = model_name
-                    break # Success! Exit the loop.
+                    break  # Success! Exit the loop.
                 except (exceptions.ResourceExhausted, exceptions.NotFound) as e:
-                    # Logs why it's skipping to the next model
-                    error_type = "Quota Hit" if isinstance(e, exceptions.ResourceExhausted) else "ID Not Found"
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipping {model_name} ({error_type})")
+                    # Logs why it's skipping to the next model in your terminal/Docker logs
+                    error_type = "Quota" if isinstance(e, exceptions.ResourceExhausted) else "404 Not Found"
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {model_name} failed ({error_type}). Trying next...")
                     continue 
                 except Exception as e:
-                    # If it's a safety filter or other error, don't try the next model
+                    # Re-raise safety filters or actual logic errors
                     raise e
 
             if not response:
-                raise Exception("All models in the chain failed.")
+                raise Exception("All models in the chain were unavailable.")
 
-            # 3. OUTPUT
-            usage = response.usage_metadata
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Model: {used_model} | Tokens: {usage.total_token_count}")
-            
+            # 3. Final Output
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS | Model: {used_model}")
             await ctx.send(f"**Summary of {summary_info}** (Generated via {used_model})")
-            await ctx.send(response.text[:2000]) # Discord 2000 char limit safety
+            
+            # Discord has a 2000 character message limit
+            summary_text = response.text
+            if len(summary_text) > 1950:
+                summary_text = summary_text[:1950] + "..."
+            
+            await ctx.send(summary_text)
                     
     except Exception as e:
-        print(f"CRITICAL ERROR: {str(e)}")
-        await ctx.send(f"❌ **Summary failed.** I tried all models in my chain but they are either exhausted or unavailable.")
+        print(f"CRITICAL ERROR: {traceback.format_exc()}")
+        await ctx.send(f"❌ **Summary failed.** I encountered an error or all models are exhausted.")
 
 @tldr.error
 async def tldr_error(ctx, error):
