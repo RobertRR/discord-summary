@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.10 📺🛡️"
+BOT_VERSION = "v3.11 - Permission & Update Fix 🛠️🔄"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -189,7 +189,16 @@ async def keystatus(ctx):
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Access Denied.")
-    await ctx.send("🔄 Pulling latest code and recycling container...")
+    await ctx.send("🔄 Deleting local script and pulling fresh code...")
+    
+    # Force delete the file from within Python to solve permission locks
+    try:
+        script_path = os.path.join(os.getcwd(), "bot.py")
+        if os.path.exists(script_path):
+            os.remove(script_path)
+    except Exception as e:
+        log_info(f"Pre-update delete failed: {e}")
+        
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
@@ -248,13 +257,10 @@ async def tldw(ctx):
         async with ctx.typing():
             full_text = ""
             try:
-                # Robust transcript retrieval
                 transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                # Tries manual/auto English ('en') first
                 try:
                     transcript_data = transcript_list.find_transcript(['en']).fetch()
                 except:
-                    # If 'en' is missing, grab whatever is first available
                     transcript_data = transcript_list.find_generated_transcript(['en']).fetch()
                 
                 full_text = " ".join([i['text'] for i in transcript_data])
@@ -268,7 +274,6 @@ async def tldw(ctx):
                 f"Keep it professional and concise.\n\nTRANSCRIPT:\n{full_text[:50000]}"
             )
             
-            # Explicitly use Flash-first chain for TLDW
             flash_chain = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview']
             await process_ai_request(ctx, prompt, "Video Summary (TL;DW)", update_stats=False, custom_chain=flash_chain)
 
