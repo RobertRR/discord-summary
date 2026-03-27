@@ -2,12 +2,12 @@ import discord
 from discord.ext import commands
 import google.generativeai as genai
 from google.api_core import exceptions
-import re, asyncio, functools, sys, os, json
+import re, asyncio, functools, sys, os, json, logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.6 📋✨"
+BOT_VERSION = "v3.7 📋✨"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
