@@ -16,37 +16,29 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-
-@bot.command(name="help")
-async def custom_help(ctx):
-    embed = discord.Embed(
-        title="🤖 Discord Summarizer Help",
-        description="Summarize chat history using Gemini AI.",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="📜 By Count", value="`!tldr 50` or `!tldr messages 50`", inline=False)
-    embed.add_field(name="⏰ By Time", value="`!tldr 1 hour` or `!tldr 30 mins`", inline=False)
-    await ctx.send(embed=embed)
+    print(f"Logged in as {bot.user}")
 
 @bot.command(name="tldr")
 async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
-    # 1. Input Handling
+    # 1. Improved Input Parsing
+    # Determine which is the number and which is the label
     if arg1.isdigit():
-        value, unit = int(arg1), arg2.lower()
+        value, label = int(arg1), arg2.lower()
     elif arg2.isdigit():
-        value, unit = int(arg2), arg1.lower()
+        value, label = int(arg2), arg1.lower()
     else:
-        return await ctx.send("❌ Please provide a number (e.g., `!tldr 50` or `!tldr 1 hour`)")
+        return await ctx.send("❌ Usage: `!tldr 50` or `!tldr 10 mins`")
 
     transcript_list = []
     header_text = ""
     
-    # 2. Flexible Time Detection (min, mins, minutes, hour, hours, hr)
-    is_time = any(u in unit for u in ["min", "hour", "hr"])
-    
-    if is_time:
-        if "min" in unit:
+    # Check for any time-related keywords in the label
+    time_units = ["min", "mins", "minute", "minutes", "hour", "hours", "hr", "hrs"]
+    is_time_request = any(unit in label for unit in time_units)
+
+    # 2. Fetching Logic
+    if is_time_request:
+        if any(m in label for m in ["min", "minute"]):
             delta = timedelta(minutes=value)
             display_unit = "minutes"
         else:
@@ -55,10 +47,12 @@ async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
             
         header_text = f"Summary of the last {value} {display_unit} as requested by {ctx.author.mention}"
         
+        # Fetching by Time
         async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
             transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
     else:
+        # Defaulting to Message Count
         header_text = f"Summary of the last {value} messages as requested by {ctx.author.mention}"
         
         async for msg in ctx.channel.history(limit=value + 5):
@@ -68,12 +62,12 @@ async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
         transcript_list.reverse()
 
     if not transcript_list:
-        return await ctx.send("No messages found in that range.")
+        return await ctx.send(f"No messages found in {header_text.split('as requested')[0].strip()}.")
 
-    # 3. Post the Header FIRST as its own message
+    # 3. THE FIX: Post the Header explicitly
     await ctx.send(header_text)
 
-    # 4. Prompt for Gemini
+    # 4. Gemini Processing
     transcript = "\n".join(transcript_list)
     prompt = f"""
     Summarize the following Discord transcript. 
