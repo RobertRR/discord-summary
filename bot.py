@@ -29,10 +29,12 @@ def log_info(msg):
 # --- FILE LOADER ---
 def load_file(filename):
     try:
-        with open(filename, "r") as f:
+        # Using absolute paths to ensure Docker finds them
+        path = os.path.join(os.getcwd(), filename)
+        with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        log_info("CRITICAL: {} not found!".format(filename))
+        log_info("CRITICAL: {} not found in {}".format(filename, os.getcwd()))
         return []
 
 token_list = load_file("discordtoken.txt")
@@ -60,20 +62,25 @@ bot.remove_command('help')
 async def on_ready():
     log_info("--- {} ONLINE ---".format(bot.user.name))
     
-    # Check if we were in the middle of an update
-    if os.path.exists("update_channel.txt"):
+    # Wait a moment for the cache to populate
+    await asyncio.sleep(2)
+    
+    update_file = os.path.join(os.getcwd(), "update_channel.txt")
+    if os.path.exists(update_file):
         try:
-            with open("update_channel.txt", "r") as f:
+            with open(update_file, "r") as f:
                 channel_id = int(f.read().strip())
+            
             channel = bot.get_channel(channel_id)
             if channel:
                 await channel.send("✅ **Update Completed:** The bot has successfully restarted and is now running the latest code.")
+            else:
+                log_info("Could not find channel ID {} after restart.".format(channel_id))
         except Exception as e:
-            log_info("Failed to send update completion message: {}".format(e))
+            log_info("Failed to post update message: {}".format(e))
         finally:
-            # Always delete the file so it doesn't spam on every normal reboot
-            if os.path.exists("update_channel.txt"):
-                os.remove("update_channel.txt")
+            if os.path.exists(update_file):
+                os.remove(update_file)
 
 # --- COMMANDS ---
 
@@ -99,12 +106,19 @@ async def update(ctx):
     
     await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting...")
     
-    # Save the current channel ID to a file so we know where to post after restart
-    with open("update_channel.txt", "w") as f:
-        f.write(str(ctx.channel.id))
-        
-    log_info("Update initiated by {}. Restarting...".format(ctx.author.display_name))
-    sys.exit(0)
+    update_file = os.path.join(os.getcwd(), "update_channel.txt")
+    try:
+        # Force a sync to the disk before exiting
+        with open(update_file, "w") as f:
+            f.write(str(ctx.channel.id))
+            f.flush()
+            os.fsync(f.fileno())
+        log_info("Update channel saved. Restarting...")
+        sys.exit(0)
+    except Exception as e:
+        log_info("CRITICAL: Failed to write update_channel.txt: {}".format(e))
+        await ctx.send("⚠️ **Error:** Could not save restart state. Update might still occur, but I won't be able to post a completion message.")
+        sys.exit(0)
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
