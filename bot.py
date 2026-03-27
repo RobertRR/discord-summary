@@ -67,16 +67,13 @@ async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
         "* **!tldr [amount]**\n"
-        "  Summarizes recent activity. Examples: `!tldr 50`, `!tldr 1hr`.\n\n"
+        "  Summarizes activity with jump-links to messages.\n\n"
         "* **!arguments [amount]**\n"
-        "  Analyzes conflicts, creates a stance table, and provides a verdict.\n\n"
+        "  Analyzes conflicts, identifies who got mogged, and provides verdicts.\n\n"
         "* **!keystatus**\n"
-        "  Check the health and quota of the AI API keys.\n\n"
-        "* **!help**\n"
-        "  Shows this message.\n\n"
-        "**👑 Admin Only**\n"
+        "  Check AI API key health.\n\n"
         "* **!update**\n"
-        "  Pulls latest code from GitHub and restarts the bot."
+        "  **(Admin)** Pulls code and restarts."
     )
     await ctx.send(help_text)
 
@@ -111,15 +108,18 @@ async def fetch_history(ctx, args):
     transcript_list = []
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
+    # Base URL for masked links
+    base_url = "https://discord.com/channels/{}/{}/".format(ctx.guild.id, ctx.channel.id)
+
     if is_time_mode:
         delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
         async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
-            transcript_list.append("USER: {} | MSG: {}".format(msg.author.display_name, msg.content))
+            transcript_list.append("USER: {} | LINK: {}{} | MSG: {}".format(msg.author.display_name, base_url, msg.id, msg.content))
     else:
         async for msg in ctx.channel.history(limit=value + 10):
             if msg.author.bot or msg.id == ctx.message.id: continue
-            transcript_list.append("USER: {} | MSG: {}".format(msg.author.display_name, msg.content))
+            transcript_list.append("USER: {} | LINK: {}{} | MSG: {}".format(msg.author.display_name, base_url, msg.id, msg.content))
             if len(transcript_list) >= value: break
         transcript_list.reverse()
     
@@ -132,11 +132,9 @@ async def tldr(ctx, *, args: str = "50"):
     if not transcript: return await ctx.send("No messages found.")
     full_transcript = "\n".join(transcript)
     prompt = """
-    Summarize this Discord transcript grouped by user.
-    RULES:
-    1. Start each user section with __Nickname__
-    2. Use bullet points (*) and **bolding** for emphasis.
-    3. Use '---SPLIT---' between users.
+    Summarize this Discord transcript. Group by user.
+    For each user, provide a list of their main points.
+    IMPORTANT: You will see 'LINK: [URL]' in the transcript. Use this to create a Masked Link [Jump to Message](URL) for the most important point they made.
     
     TRANSCRIPT:
     {}
@@ -153,21 +151,21 @@ async def arguments(ctx, *, args: str = "50"):
     prompt = """
     Analyze the following Discord transcript for disagreements.
     
-    1. SUMMARY TABLE:
-       You MUST provide a Markdown table. Do NOT wrap the table in a code block.
-       The table MUST look exactly like this:
-       | **Users** | **Topic** | **Stance A** | **Stance B** |
-       | :--- | :--- | :--- | :--- |
-       | Name vs Name | The Subject | Position 1 | Position 2 |
+    1. CONFLICT SUMMARY:
+       List each argument found. State who was involved and the core disagreement.
+       Use the provided LINKs in the transcript to include a [View Context](URL) link for each argument.
 
     2. KEY POINTS:
-       Provide a breakdown for each side.
+       Break down Side A and Side B using bullet points and **bolding**.
 
     3. VERDICT:
        Analyze who is logically or factually 'more right'.
 
+    4. MOGG RATING:
+       Assess if anyone in the conversation has been 'mogged' (dominated or significantly outclassed in the debate) as used in online culture. If so, describe who mogged whom and why.
+
     RULES:
-    - Use '---SPLIT---' to separate the Table, the Key Points, and the Verdict.
+    - Use '---SPLIT---' to separate these 4 sections.
     - If no argument exists, say 'The vibes are currently immaculate'.
     
     TRANSCRIPT:
@@ -197,10 +195,7 @@ async def process_ai_request(ctx, prompt, title_prefix):
 
         await ctx.send("### {} for {}\n> **Model:** {}".format(title_prefix, ctx.author.mention, used_model))
         
-        # CLEANUP: Remove backticks that might surround the table
         raw_output = response.text
-        raw_output = raw_output.replace("```markdown", "").replace("```", "")
-        
         sections = raw_output.split("---SPLIT---")
         for section in sections:
             content = section.strip()
