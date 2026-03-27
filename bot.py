@@ -231,7 +231,7 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     
-    # FIX: Join transcript outside of the f-string to avoid backslash error
+    # FIX: Join transcript outside f-string
     history_text = "\n".join(transcript)
     
     prompt = f"""Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"""
@@ -245,7 +245,7 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     
-    # FIX: Join transcript outside of the f-string to avoid backslash error
+    # FIX: Join transcript outside f-string
     history_text = "\n".join(transcript)
     
     prompt = f"""Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"""
