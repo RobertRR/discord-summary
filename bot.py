@@ -4,7 +4,6 @@ import google.generativeai as genai
 import os
 from datetime import datetime, timedelta
 
-# 1. Configuration
 TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -13,82 +12,57 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 
 intents = discord.Intents.default()
 intents.message_content = True
-# Removing the default help command to use our custom one
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print("Prometheus System: Online")
 
-# 2. New Help Command
 @bot.command(name="help")
 async def custom_help(ctx):
     embed = discord.Embed(
         title="🤖 Discord Summarizer Help",
-        description="I use Gemini AI to summarize chat history by user.",
+        description="Summarize chat history using Gemini AI.",
         color=discord.Color.blue()
     )
-    embed.add_field(
-        name="📜 Summarize by Count", 
-        value="`!tldr 50` \nSummarizes the last 50 messages.", 
-        inline=False
-    )
-    embed.add_field(
-        name="⏰ Summarize by Time", 
-        value="`!tldr 1 hour` or `!tldr 30 minutes` \nSummarizes everything within that window.", 
-        inline=False
-    )
-    embed.set_footer(text="Built for Prometheus Home Server")
+    embed.add_field(name="📜 By Count", value="`!tldr 50`", inline=True)
+    embed.add_field(name="⏰ By Time", value="`!tldr 1 hour`", inline=True)
     await ctx.send(embed=embed)
 
 @bot.command(name="tldr")
 async def tldr(ctx, value: str = "50", unit: str = "messages"):
     transcript_list = []
-    search_label = ""
-
-    # Logic to fetch history
+    
+    # 1. Fetching Logic
     if unit.lower() in ["hour", "hours", "minute", "minutes", "min", "hr"]:
         amount = int(value)
         delta = timedelta(minutes=amount) if "min" in unit.lower() else timedelta(hours=amount)
-        search_after = discord.utils.utcnow() - delta
-        search_label = f"everything since {amount} {unit} ago"
-        
-        await ctx.send(f"⏳ Scanning messages from the last {amount} {unit}...")
-        
-        async for msg in ctx.channel.history(after=search_after, oldest_first=True):
-            if msg.author.bot or msg.id == ctx.message.id:
-                continue
-            # New Formatting: DisplayName (username)
-            transcript_list.append(f"{msg.author.display_name} ({msg.author.name}): {msg.content}")
+        async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
+            if msg.author.bot or msg.id == ctx.message.id: continue
+            # Explicitly labeling fields for the AI
+            transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
     else:
         count = int(value)
-        search_label = f"the last {count} messages"
-        await ctx.send(f"📂 Fetching the last {count} messages...")
-        
         async for msg in ctx.channel.history(limit=count + 5):
-            if msg.author.bot or msg.id == ctx.message.id:
-                continue
-            # New Formatting: DisplayName (username)
-            transcript_list.append(f"{msg.author.display_name} ({msg.author.name}): {msg.content}")
-            if len(transcript_list) >= count:
-                break
+            if msg.author.bot or msg.id == ctx.message.id: continue
+            transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
+            if len(transcript_list) >= count: break
         transcript_list.reverse()
 
     if not transcript_list:
-        await ctx.send("No messages found in that range.")
-        return
+        return await ctx.send("No messages found.")
 
-    # Prepare Prompt
+    # 2. Refined AI Prompt
     transcript = "\n".join(transcript_list)
     prompt = f"""
-    Summarize this Discord transcript ({search_label}).
+    Summarize the following Discord transcript. 
     
-    FORMATTING RULES:
-    - Group by user. 
-    - Use this exact header format: __**Display Name (username)**__
-    - Use '---SPLIT---' between each user's block.
-    - Be concise and focus on key points/actions.
+    STRICT FORMATTING RULES:
+    - Group the summary by the person who spoke.
+    - Every user section MUST start with their name formatted exactly like this: __DISPLAY_NAME [username]__
+    - DO NOT use bold (**). Use only double underscores (__) for underlining the header.
+    - Use the 'DISPLAY_NAME' and 'USERNAME' tags provided in the transcript for accuracy.
+    - Separate each user's summary block with '---SPLIT---'.
     
     TRANSCRIPT:
     {transcript}
@@ -101,7 +75,7 @@ async def tldr(ctx, value: str = "50", unit: str = "messages"):
                 if section.strip():
                     await ctx.send(section.strip())
     except Exception as e:
-        print(f"Gemini Error: {e}")
-        await ctx.send("❌ Summary failed. Check logs on Prometheus.")
+        print(f"Error: {e}")
+        await ctx.send("❌ Summary failed.")
 
 bot.run(TOKEN)
