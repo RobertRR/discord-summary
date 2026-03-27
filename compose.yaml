@@ -7,9 +7,7 @@ services:
       - /projects/discord-summary:/app
     working_dir: /app
     healthcheck:
-      test:
-        - CMD-SHELL
-        - pgrep -f python || exit 1
+      test: ["CMD-SHELL", "pgrep -f python || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -17,6 +15,6 @@ services:
       sh -c "apt-get update && apt-get install -y curl procps && 
              rm -f bot.py && sleep 1 && 
              curl -H 'Cache-Control: no-cache, no-store' -sSL https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py?nocache=$(date +%s) -o bot.py && 
-             pip install discord.py google-generativeai && 
+             pip install discord.py google-generativeai youtube-transcript-api && 
              python bot.py"
 networks: {}
