@@ -32,7 +32,7 @@ def load_file(filename):
         with open(filename, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        log_info("CRITICAL: File not found!")
+        log_info("CRITICAL: {} not found!".format(filename))
         return []
 
 token_list = load_file("discordtoken.txt")
@@ -56,19 +56,24 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
 
-# Global variable to track if we are waiting for a post-update message
-is_restarting_from_update = False
-
 @bot.event
 async def on_ready():
     log_info("--- {} ONLINE ---".format(bot.user.name))
-    if ADMIN_IDS:
+    
+    # Check if we were in the middle of an update
+    if os.path.exists("update_channel.txt"):
         try:
-            admin = await bot.fetch_user(ADMIN_IDS[0])
-            # This triggers on every boot, serving as your "Update Completed" signal
-            await admin.send("✅ **Update Completed:** The bot is back online and running.")
+            with open("update_channel.txt", "r") as f:
+                channel_id = int(f.read().strip())
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send("✅ **Update Completed:** The bot has successfully restarted and is now running the latest code.")
         except Exception as e:
-            log_info("Could not send boot notification.")
+            log_info("Failed to send update completion message: {}".format(e))
+        finally:
+            # Always delete the file so it doesn't spam on every normal reboot
+            if os.path.exists("update_channel.txt"):
+                os.remove("update_channel.txt")
 
 # --- COMMANDS ---
 
@@ -91,8 +96,14 @@ async def help_command(ctx):
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS:
         return await ctx.send("⛔ **Access Denied.**")
-    await ctx.send("🔄 **Update Triggered.** Restarting...")
-    # sys.exit(0) relies on your Docker 'restart: always' policy to bring it back up
+    
+    await ctx.send("🔄 **Update Triggered.** Pulling latest code and restarting...")
+    
+    # Save the current channel ID to a file so we know where to post after restart
+    with open("update_channel.txt", "w") as f:
+        f.write(str(ctx.channel.id))
+        
+    log_info("Update initiated by {}. Restarting...".format(ctx.author.display_name))
     sys.exit(0)
 
 @bot.command(name="keystatus")
@@ -160,19 +171,19 @@ async def arguments(ctx, *, args: str = "50"):
     prompt = """
     Analyze the following Discord transcript for disagreements.
     
-    1. # CONFLICT SUMMARY
-       Briefly list each argument found. State who was involved and the core disagreement. 
-       Do NOT include links in this section.
+    # CONFLICT SUMMARY
+    Briefly list each argument found. State who was involved and the core disagreement. 
+    Do NOT include links in this section.
 
-    2. # KEY POINTS
-       Break down Side A and Side B using bullet points.
-       For every major point raised, you MUST use the corresponding LINK from the transcript to create a masked link: [Context](URL).
+    # KEY POINTS
+    Break down Side A and Side B using bullet points.
+    For every major point raised, you MUST use the corresponding LINK from the transcript to create a masked link: [Context](URL).
 
-    3. # VERDICT
-       Analyze who is logically or factually 'more right'.
+    # VERDICT
+    Analyze who is logically or factually 'more right'.
 
-    4. # MOGG RATING
-       Assess if anyone in the conversation has been 'mogged'.
+    # MOGG RATING
+    Assess if anyone in the conversation has been 'mogged'.
 
     RULES:
     - Use '---SPLIT---' to separate these 4 sections.
