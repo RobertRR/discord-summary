@@ -39,17 +39,22 @@ def load_file(filename):
 
 def load_mogg_data():
     path = os.path.join(os.getcwd(), "mogg_stats.json")
+    # If file doesn't exist, start fresh
     if not os.path.exists(path):
         return {}
     
     try:
         with open(path, "r") as f:
-            content = f.read().strip()
-            if not content:
+            # Read everything
+            raw_content = f.read().strip()
+            # If the file is empty or just whitespace, return empty dict
+            if not raw_content:
                 return {}
-            return json.loads(content)
-    except (json.JSONDecodeError, Exception) as e:
-        log_info("mogg_stats.json error: {}. Returning empty dict.".format(e))
+            # Try to parse the string
+            return json.loads(raw_content)
+    except Exception as e:
+        # This catches JSONDecodeError, FileNotFoundError, etc.
+        log_info("Mogg Data Error: {}. Returning empty dictionary.".format(e))
         return {}
 
 def save_mogg_data(data):
@@ -141,7 +146,6 @@ async def moggboard(ctx):
     if not data:
         return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
 
-    # Sorting logic: Ratio first, then total wins
     sorted_users = sorted(
         data.items(), 
         key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), 
@@ -288,6 +292,7 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
             if match:
                 winner = match.group(1).strip()
                 loser = match.group(2).strip()
+                # CALLING LOAD_MOGG_DATA
                 data = load_mogg_data()
                 
                 for p in [winner, loser]:
