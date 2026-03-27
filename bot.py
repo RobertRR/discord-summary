@@ -4,7 +4,8 @@ import google.generativeai as genai
 from google.api_core import exceptions
 import re
 import traceback
-import math
+import asyncio
+import functools
 from datetime import datetime, timedelta
 
 # --- FILE LOADER HELPERS ---
@@ -56,6 +57,12 @@ async def keystatus(ctx):
         msg += f"* **{model}:** {len(ALL_KEYS)-dead}/{len(ALL_KEYS)} Keys Available\n"
     await ctx.send(msg)
 
+# Helper function to run the blocking Gemini call in a separate thread
+async def get_summary_async(model, prompt):
+    loop = asyncio.get_running_loop()
+    # This keeps the Discord loop moving while Gemini thinks
+    return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
+
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
@@ -84,18 +91,18 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # RESTORED: Specific instructions for per-user grouping
         prompt = f"""
-        Provide a nuanced summary of this transcript. 
-        STRICT RULES:
+        Summarize this Discord transcript.
+        
+        STRICT FORMATTING RULES:
         1. Group the summary BY USER.
-        2. Use the Header: __Nickname__ (No bolding on the name).
-        3. Use bullet points (*) only for the summary details. 
-        4. NO BOLDING (**) anywhere in the summary text.
-        5. End each user block with the exact string: ---SPLIT---
+        2. Use the exact header format: __Nickname__
+        3. Use bullet points (*) for their specific actions or points.
+        4. ABSOLUTELY NO BOLDING (**) in the output.
+        5. Separate each user block with the exact text: ---SPLIT---
         
         TRANSCRIPT:
-        {"/n".join(transcript_list)}
+        {"\n".join(transcript_list)}
         """
 
         # 2. KEY-PRIORITY LOGIC
@@ -110,7 +117,8 @@ async def tldr(ctx, *, args: str = "50"):
                     try:
                         configure_genai(i)
                         current_model = genai.GenerativeModel(model_name)
-                        response = current_model.generate_content(prompt)
+                        # FIXED: Now uses the async helper to prevent loop freezing
+                        response = await get_summary_async(current_model, prompt)
                         used_model = model_name
                         used_key_num = i + 1
                         break 
@@ -124,26 +132,24 @@ async def tldr(ctx, *, args: str = "50"):
 
             if not response:
                 exhausted_tracker.clear()
-                await ctx.send("🔄 Quotas hit. Resetting and retrying...")
+                await ctx.send("🔄 Quotas hit. Resetting tracker and retrying...")
                 return await tldr(ctx, args=args)
 
-            # 3. Output (RESTORED: Multi-message split logic)
+            # 3. Output logic
             header = f"### Summary for {ctx.author.mention}\n> **Context:** {summary_info} | **Model:** {used_model} | **Key:** #{used_key_num}"
             await ctx.send(header)
             
-            # Clean up double asterisks and split by our custom delimiter
             clean_text = response.text.replace("**", "")
             sections = clean_text.split("---SPLIT---")
             
             for section in sections:
-                msg_content = section.strip()
-                if msg_content:
-                    # Discord safety: split again if a single user's block is huge
-                    if len(msg_content) > 1900:
-                        parts = [msg_content[i:i+1900] for i in range(0, len(msg_content), 1900)]
-                        for p in parts: await ctx.send(p)
+                content = section.strip()
+                if content:
+                    if len(content) > 1900:
+                        for j in range(0, len(content), 1900):
+                            await ctx.send(content[j:j+1900])
                     else:
-                        await ctx.send(msg_content)
+                        await ctx.send(content)
                     
     except Exception as e:
         print(f"ERROR: {traceback.format_exc()}")
