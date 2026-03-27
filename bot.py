@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} | Sync Time: {datetime.now().strftime('%H:%M:%S')}")
+    print(f"Logged in as {bot.user} | System Time: {datetime.now().strftime('%H:%M:%S')}")
 
 @bot.command(name="tldr")
 async def tldr(ctx, *, args: str = "50"):
@@ -31,7 +31,7 @@ async def tldr(ctx, *, args: str = "50"):
     is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
 
     try:
-        # 1. Fetching Logic
+        # 1. FETCH LOGIC
         if is_time_mode:
             if "min" in raw_input:
                 delta = timedelta(minutes=value)
@@ -54,6 +54,46 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        # 2. Preparation
+        # 2. PROMPT BUILDING
         full_transcript_text = "\n".join(transcript_list)
-        prompt =
+        prompt = f"""
+        Summarize this Discord transcript into concise bullet points. Group by user.
+        
+        STRICT FORMATTING:
+        - Header: __Display Name [username]__
+        - Body: Use a single asterisk (*) for bullet points.
+        - NO BOLDING (**).
+        - NO PARAGRAPHS.
+        - Split each user with '---SPLIT---'.
+
+        TRANSCRIPT:
+        {full_transcript_text}
+        """
+
+        # 3. GENERATION
+        async with ctx.typing():
+            response = model.generate_content(prompt)
+            
+            if not response or not response.text:
+                await ctx.send("❌ Gemini returned no data.")
+                return
+
+            # Programmatically strip all double asterisks (bolding)
+            clean_text = response.text.replace("**", "")
+            
+            # Send initial tag message
+            await ctx.send(f"Summary of {summary_info} as requested by {ctx.author.mention}")
+            
+            # Send each user section
+            sections = clean_text.split('---SPLIT---')
+            for section in sections:
+                final_output = section.strip()
+                if final_output:
+                    await ctx.send(final_output)
+
+    except Exception as e:
+        print(f"CRITICAL ERROR: {str(e)}")
+        traceback.print_exc()
+        await ctx.send(f"❌ Error encountered: {str(e)[:100]}")
+
+bot.run(TOKEN)
