@@ -84,6 +84,30 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
 
+# --- RECOVERY LOGIC ---
+@bot.event
+async def on_ready():
+    log_info("--- {} ONLINE ---".format(bot.user.name))
+    
+    # Wait for internal cache to warm up
+    await asyncio.sleep(5) 
+    
+    update_file = os.path.join(os.getcwd(), "update_channel.txt")
+    if os.path.exists(update_file):
+        try:
+            with open(update_file, "r") as f:
+                content = f.read().strip()
+                if content:
+                    channel_id = int(content)
+                    # Use fetch_channel if get_channel returns None (cache miss)
+                    channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+                    if channel:
+                        await channel.send("✅ **Update Completed:** I am back online and monitoring cortisol levels.")
+        except Exception as e:
+            log_info("Recovery Message Failed: {}".format(e))
+        finally:
+            if os.path.exists(update_file): os.remove(update_file)
+
 # --- RANKING LOGIC ---
 def get_rank_class(ratio):
     r = ratio * 100
@@ -109,10 +133,12 @@ async def help_command(ctx):
         "  Analyzes specific conflicts and updates the Moggboard.\n\n"
         "* **!moggboard**\n"
         "  View the server's dominance hierarchy.\n\n"
+        "* **!clearmogs**\n"
+        "  **(Admin Only)** Resets all Moggboard statistics to zero.\n\n"
         "* **!keystatus**\n"
-        "  Check API health and daily quotas.\n\n"
+        "  Check API health, cooldowns, and daily quotas.\n\n"
         "* **!update**\n"
-        "  **(Admin)** Pulls latest code and restarts."
+        "  **(Admin Only)** Pulls latest code and restarts the container."
     )
     await ctx.send(help_text)
 
@@ -128,6 +154,12 @@ async def moggboard(ctx):
         rank_class = get_rank_class(ratio)
         msg += "{}. **{}**\n> **Class:** `{}` | **Stats:** `{}W - {}L` ({:.1f}%)\n\n".format(i, user, rank_class, w, l, ratio*100)
     await ctx.send(msg)
+
+@bot.command(name="clearmogs")
+async def clearmogs(ctx):
+    if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Admin only.")
+    save_json_data("mogg_stats.json", {})
+    await ctx.send("🗑️ **Moggboard Reset.** All dominance data has been wiped.")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -145,7 +177,8 @@ async def keystatus(ctx):
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Access Denied.")
-    await ctx.send("🔄 Restarting...")
+    await ctx.send("🔄 Restarting and pulling latest code...")
+    # Write the channel ID so we know where to say "I'm back"
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
