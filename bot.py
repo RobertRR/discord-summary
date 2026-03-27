@@ -40,8 +40,15 @@ def load_file(filename):
 def load_mogg_data():
     path = os.path.join(os.getcwd(), "mogg_stats.json")
     if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
+        try:
+            # Check if file is empty
+            if os.path.getsize(path) == 0:
+                return {}
+            with open(path, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            log_info("mogg_stats.json was corrupted. Resetting to empty.")
+            return {}
     return {}
 
 def save_mogg_data(data):
@@ -78,10 +85,12 @@ async def on_ready():
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f:
-                channel_id = int(f.read().strip())
-            channel = bot.get_channel(channel_id)
-            if channel:
-                await channel.send("✅ **Update Completed:** The bot has successfully restarted.")
+                content = f.read().strip()
+                if content:
+                    channel_id = int(content)
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        await channel.send("✅ **Update Completed:** The bot is back online.")
         except Exception as e:
             log_info("Failed to post update message: {}".format(e))
         finally:
@@ -91,7 +100,7 @@ async def on_ready():
 # --- RANKING LOGIC ---
 def get_rank_class(ratio):
     r = ratio * 100
-    if r >= 99.5: return "Immortal" # Top ~1% logic
+    if r >= 99.5: return "Immortal"
     if r >= 90: return "Divine"
     if r >= 75: return "Ancient"
     if r >= 55: return "Legend"
@@ -126,7 +135,6 @@ async def moggboard(ctx):
     if not data:
         return await ctx.send("The Moggboard is currently empty. Start some beef with `!arguments`!")
 
-    # Sort by Mogg Wins, then Ratio
     sorted_users = sorted(
         data.items(), 
         key=lambda x: (x[1]['wins'], x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1)), 
@@ -140,10 +148,9 @@ async def moggboard(ctx):
     for i, (user_name, stats) in enumerate(sorted_users, 1):
         w = stats['wins']
         l = stats['losses']
-        ratio = w / (w + l) if (w + l) > 0 else 0
+        total = w + l
+        ratio = w / total if total > 0 else 0
         rank_class = get_rank_class(ratio)
-        
-        # Format ratio as percentage
         ratio_pct = "{:.1f}%".format(ratio * 100)
         
         msg += "| #{} | **{}** | {} | {} | {} | *{}* |\n".format(i, user_name, w, l, ratio_pct, rank_class)
