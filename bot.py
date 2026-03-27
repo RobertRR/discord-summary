@@ -67,7 +67,9 @@ ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
 # --- API KEY MANAGER ---
+# Structure: { model_name: { key_index: expiry_datetime } }
 exhausted_tracker = {}
+
 def configure_genai(key_index):
     genai.configure(api_key=ALL_KEYS[key_index])
 
@@ -130,7 +132,7 @@ async def help_command(ctx):
         "* **!clearmogs**\n"
         "  **(Admin)** Resets all Moggboard statistics.\n\n"
         "* **!keystatus**\n"
-        "  Check AI API key health.\n\n"
+        "  Check AI API key health and cooldowns.\n\n"
         "* **!update**\n"
         "  **(Admin)** Pulls latest code and restarts."
     )
@@ -194,14 +196,32 @@ async def update(ctx):
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
-    if not exhausted_tracker:
-        await ctx.send("✅ All keys are fresh.")
-        return
+    now = datetime.now()
     msg = "### 🔑 API Key Status\n"
+    
+    anything_exhausted = False
     for model in MODEL_CHAIN:
-        dead = len(exhausted_tracker.get(model, []))
-        msg += "* **{}:** {}/{} Keys Available\n".format(model, len(ALL_KEYS)-dead, len(ALL_KEYS))
-    await ctx.send(msg)
+        # Clean up expired cooldowns
+        if model in exhausted_tracker:
+            exhausted_tracker[model] = {k: v for k, v in exhausted_tracker[model].items() if v > now}
+        
+        exhausted_keys = exhausted_tracker.get(model, {})
+        dead_count = len(exhausted_keys)
+        available = len(ALL_KEYS) - dead_count
+        
+        msg += "* **{}:** {}/{} Keys Available\n".format(model, available, len(ALL_KEYS))
+        
+        if dead_count > 0:
+            anything_exhausted = True
+            # Find the key that will be available the soonest
+            next_available = min(exhausted_keys.values())
+            wait_time = int((next_available - now).total_seconds())
+            msg += "  └ ⏳ Next key available in: `{}s`\n".format(wait_time)
+
+    if not anything_exhausted:
+        await ctx.send("✅ **All keys are fresh.** Systems nominal.")
+    else:
+        await ctx.send(msg)
 
 # --- CORE LOGIC ---
 
@@ -279,22 +299,42 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
     async with ctx.typing():
         response = None
         used_model = ""
+        now = datetime.now()
+
         for model_name in MODEL_CHAIN:
+            if model_name not in exhausted_tracker:
+                exhausted_tracker[model_name] = {}
+
             for i in range(len(ALL_KEYS)):
-                if i in exhausted_tracker.get(model_name, []): continue
+                # Check if this specific key is currently in cooldown for this model
+                if i in exhausted_tracker[model_name]:
+                    if now < exhausted_tracker[model_name][i]:
+                        continue
+                    else:
+                        # Cooldown finished, remove from tracker
+                        del exhausted_tracker[model_name][i]
+
                 try:
                     configure_genai(i)
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
                     break 
-                except Exception: continue
+                except exceptions.ResourceExhausted:
+                    # Mark key as exhausted for 60 seconds (standard free tier reset)
+                    exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
+                    log_info("Key #{} exhausted for {}. Cool-down initiated.".format(i, model_name))
+                    continue
+                except Exception as e:
+                    log_info("Non-quota error with Key #{} on {}: {}".format(i, model_name, e))
+                    continue
+            
             if response: break
 
         if not response:
-            return await ctx.send("🔄 Quotas hit. Try again later.")
+            return await ctx.send("🔄 **All Quotas Exhausted.** Try again in a minute or add more keys.")
 
-        await ctx.send("### {} for {}\n> **Model:** {}".format(title_prefix, ctx.author.mention, used_model))
+        await ctx.send("### {} for {}\n> **Model:** `{}`".format(title_prefix, ctx.author.mention, used_model))
         
         raw_output = response.text
         sections = raw_output.split("---SPLIT---")
