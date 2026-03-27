@@ -25,34 +25,41 @@ async def custom_help(ctx):
         description="Summarize chat history using Gemini AI.",
         color=discord.Color.blue()
     )
-    embed.add_field(name="📜 By Count", value="`!tldr 50`", inline=True)
-    embed.add_field(name="⏰ By Time", value="`!tldr 1 hour`", inline=True)
+    embed.add_field(name="📜 By Count", value="`!tldr 50` or `!tldr messages 50`", inline=False)
+    embed.add_field(name="⏰ By Time", value="`!tldr 1 hour` or `!tldr 30 minutes`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command(name="tldr")
-async def tldr(ctx, value: str = "50", unit: str = "messages"):
+async def tldr(ctx, arg1: str = "50", arg2: str = "messages"):
+    # Smart Input Handling: Figure out which is the number and which is the unit
+    if arg1.isdigit():
+        value, unit = int(arg1), arg2.lower()
+    elif arg2.isdigit():
+        value, unit = int(arg2), arg1.lower()
+    else:
+        return await ctx.send("❌ Please provide a number (e.g., `!tldr 50` or `!tldr 1 hour`)")
+
     transcript_list = []
     
     # 1. Fetching Logic
-    if unit.lower() in ["hour", "hours", "minute", "minutes", "min", "hr"]:
-        amount = int(value)
-        delta = timedelta(minutes=amount) if "min" in unit.lower() else timedelta(hours=amount)
+    if unit in ["hour", "hours", "minute", "minutes", "min", "hr"]:
+        delta = timedelta(minutes=value) if "min" in unit else timedelta(hours=value)
+        await ctx.send(f"⏳ Scanning messages from the last {value} {unit}...")
         async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
-            # Explicitly labeling fields for the AI
             transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
     else:
-        count = int(value)
-        async for msg in ctx.channel.history(limit=count + 5):
+        await ctx.send(f"📂 Fetching the last {value} messages...")
+        async for msg in ctx.channel.history(limit=value + 5):
             if msg.author.bot or msg.id == ctx.message.id: continue
             transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
-            if len(transcript_list) >= count: break
+            if len(transcript_list) >= value: break
         transcript_list.reverse()
 
     if not transcript_list:
         return await ctx.send("No messages found.")
 
-    # 2. Refined AI Prompt
+    # 2. Refined AI Prompt with your strict formatting
     transcript = "\n".join(transcript_list)
     prompt = f"""
     Summarize the following Discord transcript. 
@@ -60,8 +67,8 @@ async def tldr(ctx, value: str = "50", unit: str = "messages"):
     STRICT FORMATTING RULES:
     - Group the summary by the person who spoke.
     - Every user section MUST start with their name formatted exactly like this: __DISPLAY_NAME [username]__
-    - DO NOT use bold (**). Use only double underscores (__) for underlining the header.
-    - Use the 'DISPLAY_NAME' and 'USERNAME' tags provided in the transcript for accuracy.
+    - DO NOT use bold (**). Use only double underscores (__) for the header.
+    - Use 'DISPLAY_NAME' and 'USERNAME' tags from the transcript for the header.
     - Separate each user's summary block with '---SPLIT---'.
     
     TRANSCRIPT:
