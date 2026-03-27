@@ -10,7 +10,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} | System Time: {datetime.now().strftime('%H:%M:%S')}")
+    print(f"Logged in as {bot.user} | Sync Time: {datetime.now().strftime('%H:%M:%S')}")
 
 @bot.command(name="tldr")
 async def tldr(ctx, *, args: str = "50"):
@@ -41,52 +41,56 @@ async def tldr(ctx, *, args: str = "50"):
             
             async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
                 if msg.author.bot or msg.id == ctx.message.id: continue
-                transcript_list.append(f"{msg.author.display_name} ({msg.author.name}): {msg.content}")
+                transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
         else:
             summary_info = f"the last {value} messages"
             async for msg in ctx.channel.history(limit=value + 5):
                 if msg.author.bot or msg.id == ctx.message.id: continue
-                transcript_list.append(f"{msg.author.display_name} ({msg.author.name}): {msg.content}")
+                transcript_list.append(f"DISPLAY_NAME: {msg.author.display_name} | USERNAME: {msg.author.name} | MESSAGE: {msg.content}")
                 if len(transcript_list) >= value: break
             transcript_list.reverse()
 
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
+        # --- PREPARE THE PROMPT ---
         full_transcript_text = "\n".join(transcript_list)
-        
         prompt = f"""
-        Summarize the following Discord conversation. 
-        Group the summary by user. 
+        Summarize this Discord transcript into concise bullet points.
         
-        STRICT FORMATTING RULES:
-        1. Header: Use __Display Name [username]__ (Underlined).
-        2. Body: Use a bulleted list with '*' for each point.
-        3. No Bolding: Do not use '**' anywhere.
-        4. No Paragraphs: Each point must be its own bullet.
-        5. Separation: End each user's section with '---SPLIT---'.
-
+        STRICT RULES:
+        - Group by person.
+        - Header: __DISPLAY_NAME [username]__
+        - FORMAT: Use an asterisk (*) for each bullet point. 
+        - NO PARAGRAPHS.
+        - NO BOLD (**). Use only double underscores (__) for the header.
+        - Separate users with '---SPLIT---'.
+        
         TRANSCRIPT:
         {full_transcript_text}
         """
 
         async with ctx.typing():
             response = model.generate_content(prompt)
+            
             if not response.text:
-                raise ValueError("AI returned empty response")
+                raise ValueError("Gemini returned an empty response.")
 
-            # Programmatically strip any bolding the AI ignores
+            # Scrub all bolding
             clean_text = response.text.replace("**", "")
             
+            # 1. Send the header
             await ctx.send(f"Summary of {summary_info} as requested by {ctx.author.mention}")
             
+            # 2. Send the summaries
             for section in clean_text.split('---SPLIT---'):
                 if section.strip():
                     await ctx.send(section.strip())
-
+                    
     except Exception as e:
+        # This will print the full error to your Prometheus logs
         print(f"CRITICAL ERROR: {str(e)}")
         traceback.print_exc()
-        await ctx.send(f"❌ Summary failed: {str(e)[:100]}")
+        await ctx.send(f"❌ Summary failed. Error: {str(e)}")
 
 bot.run(TOKEN)
