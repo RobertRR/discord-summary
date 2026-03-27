@@ -16,7 +16,8 @@ services:
     command: >
       sh -c "apt-get update && apt-get install -y curl procps && 
              pip install --no-cache-dir discord.py google-generativeai youtube-transcript-api && 
-             curl -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' -sSL https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py -o bot.py && 
+             curl -H 'Cache-Control: no-cache, no-store' -sSL 'https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py?nocache=$$(date +%s)' -o bot.py.tmp && 
+             mv -f bot.py.tmp bot.py && 
              sync && 
              python -u bot.py"
 networks: {}
