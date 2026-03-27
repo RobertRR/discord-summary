@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.9 ⚡📺"
+BOT_VERSION = "v3.10 📺🛡️"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -246,11 +246,21 @@ async def tldw(ctx):
         await ctx.message.add_reaction("⏳")
 
         async with ctx.typing():
+            full_text = ""
             try:
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-                full_text = " ".join([i['text'] for i in transcript_list])
+                # Robust transcript retrieval
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                # Tries manual/auto English ('en') first
+                try:
+                    transcript_data = transcript_list.find_transcript(['en']).fetch()
+                except:
+                    # If 'en' is missing, grab whatever is first available
+                    transcript_data = transcript_list.find_generated_transcript(['en']).fetch()
+                
+                full_text = " ".join([i['text'] for i in transcript_data])
             except Exception as e:
-                return await ctx.send("❌ Could not fetch transcript: Video might not have captions enabled.")
+                log_info(f"Transcript fetch failed: {e}")
+                return await ctx.send("❌ Could not fetch transcript: Video might not have captions enabled or they are blocked.")
 
             prompt = (
                 f"Summarize the following YouTube video transcript into a single, "
