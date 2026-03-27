@@ -138,7 +138,7 @@ async def help_command(ctx):
     help_text = (
         "### 🤖 Bot Commands\n"
         "* **!tldr [amount]**\n"
-        "  Summarizes activity with jump-links.\n\n"
+        "  Summarizes activity, identifies Cortisol Spikes, and includes jump-links.\n\n"
         "* **!arguments [amount]**\n"
         "  Analyzes conflicts and updates the Moggboard.\n\n"
         "* **!moggboard**\n"
@@ -244,7 +244,24 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = "Summarize this Discord transcript grouped by user. Use [Jump to Message](URL) for significant posts.\n\nTRANSCRIPT:\n{}".format("\n".join(transcript))
+    
+    prompt = """
+    Summarize this Discord transcript grouped by user. 
+    
+    # 📝 USER SUMMARIES
+    Bullet point summaries per user with [Jump to Message](URL) for significant posts.
+
+    # 📈 CORTISOL SPIKES
+    Identify users showing signs of aggression, excessive profanity, or heavy use of ALL CAPS. 
+    Explain why they are considered 'spiked' (e.g., 'X is tilted because of Y').
+    If no one is aggressive, say 'Baseline levels detected. No spikes found.'
+
+    RULES:
+    - Use '---SPLIT---' between these 2 sections.
+    
+    TRANSCRIPT:
+    {}
+    """.format("\n".join(transcript))
     await process_ai_request(ctx, prompt, "Summary")
 
 @bot.command(name="arguments")
@@ -268,9 +285,8 @@ async def arguments(ctx, *, args: str = "50"):
     Analyze who is logically 'more right' and EXPLAIN why in detail here.
 
     # MOGG DATA
-    This section is for system tracking. You MUST use the exact format below.
-    Use ONLY the display name. DO NOT add brackets, IDs, or extra text.
     Format: "WINNER: [Name] | LOSER: [Name]"
+    Use ONLY the display name. No brackets, IDs, or punctuation.
 
     RULES:
     - Use '---SPLIT---' to separate these 4 sections.
@@ -312,23 +328,18 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
         sections = response.text.split("---SPLIT---")
 
         if update_stats:
-            # Look specifically at the last section for the WINNER/LOSER string
             mogg_section = sections[-1] if len(sections) >= 4 else ""
-            # Improved regex to handle potential trailing punctuation but stop at the name
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", mogg_section, re.IGNORECASE)
             
             if match:
                 winner = match.group(1).strip().rstrip('.,!')
                 loser = match.group(2).strip().rstrip('.,!')
                 data = load_json_data("mogg_stats.json")
-                
                 for p in [winner, loser]:
                     if p not in data: data[p] = {"wins": 0, "losses": 0}
-                
                 data[winner]["wins"] += 1
                 data[loser]["losses"] += 1
                 save_json_data("mogg_stats.json", data)
-                log_info("Moggboard Updated: {} > {}".format(winner, loser))
 
         for s in sections:
             content = s.strip()
