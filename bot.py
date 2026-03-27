@@ -16,11 +16,8 @@ def load_file(filename):
         print(f"CRITICAL: {filename} not found!")
         return []
 
-# Load Discord Token
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
-
-# Load Gemini Keys
 ALL_KEYS = load_file("keys.txt")
 
 # --- API KEY MANAGER ---
@@ -32,7 +29,6 @@ def configure_genai(key_index):
 if ALL_KEYS:
     configure_genai(0)
 
-# --- CONFIGURATION ---
 MODEL_CHAIN = [
     'gemini-3.1-pro-preview',
     'gemini-3-flash-preview',
@@ -48,7 +44,6 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f"--- {bot.user.name} ONLINE ---")
-    print(f"Keys: {len(ALL_KEYS)} | Token Loaded: {'Yes' if DISCORD_TOKEN else 'No'}")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -89,7 +84,19 @@ async def tldr(ctx, *, args: str = "50"):
         if not transcript_list:
             return await ctx.send(f"No messages found for {summary_info}.")
 
-        prompt = f"Summarize this transcript by user with bullet points:\n\n" + "\n".join(transcript_list)
+        # RESTORED: Specific instructions for per-user grouping
+        prompt = f"""
+        Provide a nuanced summary of this transcript. 
+        STRICT RULES:
+        1. Group the summary BY USER.
+        2. Use the Header: __Nickname__ (No bolding on the name).
+        3. Use bullet points (*) only for the summary details. 
+        4. NO BOLDING (**) anywhere in the summary text.
+        5. End each user block with the exact string: ---SPLIT---
+        
+        TRANSCRIPT:
+        {"/n".join(transcript_list)}
+        """
 
         # 2. KEY-PRIORITY LOGIC
         async with ctx.typing():
@@ -120,10 +127,23 @@ async def tldr(ctx, *, args: str = "50"):
                 await ctx.send("🔄 Quotas hit. Resetting and retrying...")
                 return await tldr(ctx, args=args)
 
-            # 3. Output
+            # 3. Output (RESTORED: Multi-message split logic)
             header = f"### Summary for {ctx.author.mention}\n> **Context:** {summary_info} | **Model:** {used_model} | **Key:** #{used_key_num}"
             await ctx.send(header)
-            await ctx.send(response.text[:1900])
+            
+            # Clean up double asterisks and split by our custom delimiter
+            clean_text = response.text.replace("**", "")
+            sections = clean_text.split("---SPLIT---")
+            
+            for section in sections:
+                msg_content = section.strip()
+                if msg_content:
+                    # Discord safety: split again if a single user's block is huge
+                    if len(msg_content) > 1900:
+                        parts = [msg_content[i:i+1900] for i in range(0, len(msg_content), 1900)]
+                        for p in parts: await ctx.send(p)
+                    else:
+                        await ctx.send(msg_content)
                     
     except Exception as e:
         print(f"ERROR: {traceback.format_exc()}")
