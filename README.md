@@ -6,15 +6,15 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations usin
 ## 🌟 Features
 
 * **Smart Summaries:** Grouped by user with clean, underlined headers and bullet points.
+* **Argument Resolution:** Have the bot check for an argument and determine who is right and check if anyone got mogged.
 * **👑 Multi-Server Moggboard:** A competitive dominance hierarchy. The AI analyzes arguments, declares a winner, and ranks users based on their win/loss ratio. Data is partitioned by Server ID, allowing independent rankings across multiple servers.
 * **Precision Anchors:** Use **Discord Message Links** to set exact start and end points for a summary.
 * **Contextual Replies:** Simply **reply** to any message with `!tldr` to summarize everything from that specific point forward.
 * **Token Safeguards:** Built-in limits (24h time cap / 300 message cap) to prevent runaway token usage and API exhaustion.
 * **API Key Rotation:** Automatically cycles through multiple Gemini API keys to maximize free-tier quotas with a 65-second "cool-off" for rate-limited keys.
-* **Model Fallback:** Automatically tries higher-tier models (3.1 Pro) before falling back to faster, lighter models.
+* **Model Fallback:** Automatically tries higher-tier models (e.g 3.1 Pro) before falling back to faster, lighter models.
 * **Self-Updating:** Admin-only `!update` command pulls the latest code from GitHub and restarts the container instantly.
 * **Flexible TLDR:** Supports message counts (`!tldr 50`), timeframes (`!tldr 30min`), or specific links.
-* 
 ---
 
 ## 🛠 Commands
