@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.7.8 - Fixed initialization order (NameError) and updated google-genai SDK payload.
-# Major: 4 | Minor: 7 | Subminor: 8
-BOT_VERSION = "v4.7.8 - Sequence & SDK Fix 🛠️"
+# v4.7.9 - Added !huh invocation reaction and re-engineered the prompt for brevity.
+# Major: 4 | Minor: 7 | Subminor: 9
+BOT_VERSION = "v4.7.9 - Reaction & Nano-Prompt ⚡"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -30,7 +30,6 @@ def log_info(msg):
     app_log.info(msg)
 
 # --- DATA HELPERS ---
-# NOTE: keys.txt, discordtoken.txt, and admins.txt must stay in the same dir.
 def load_file(filename):
     try:
         path = os.path.join(os.getcwd(), filename)
@@ -55,7 +54,6 @@ def save_json_data(filename, data):
             json.dump(data, f, indent=4)
             f.flush()
             # os.fsync forces the OS to write to disk immediately.
-            # Vital for NUCs to prevent corruption on sudden power loss.
             os.fsync(f.fileno()) 
     except Exception as e:
         log_info(f"Save Failed: {e}")
@@ -66,24 +64,20 @@ DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
-# exhausted_tracker: Stores (model_name -> {key_index -> reset_time})
 exhausted_tracker = {} 
-
-# MODEL_CHAIN: Order of fallback if a key is rate-limited (429) or exhausted.
 MODEL_CHAIN = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 DAILY_LIMITS = {'gemini-3.1-pro-preview': 5, 'gemini-3-flash-preview': 50, 'gemini-2.5-flash': 20, 'gemini-3.1-flash-lite-preview': 100}
 
-# --- BOT SETUP (CRITICAL: MUST BE BEFORE COMMANDS) ---
+# --- BOT SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True         
 bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command('help') # Removing default to use our custom !help logic.
+bot.remove_command('help')
 
 @bot.event
 async def on_ready():
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
-    # update_channel.txt tells the bot where to report back after a !update reboot.
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
         try:
@@ -110,7 +104,6 @@ def get_rank_class(ratio):
 
 @bot.command(name="help")
 async def help_command(ctx):
-    """Legacy styled help menu with intentional visual spacing."""
     help_text = (
         "🤖 **Bot Commands**\n"
         "**`!version`**\n"
@@ -138,7 +131,6 @@ async def help_command(ctx):
 
 @bot.command(name="version")
 async def version(ctx):
-    """Calculates process uptime."""
     delta = datetime.now() - START_TIME
     hours, remainder = divmod(int(delta.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -148,38 +140,38 @@ async def version(ctx):
 @bot.command(name="huh")
 async def huh(ctx):
     """
-    Fact-Checker: Extracts text/images and uses types.Part for SDK compatibility.
+    Concise Fact-Checker: Initiates a reaction feedback and uses a tightened prompt.
     """
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
     
+    # Visual Feedback: Let the user know the command was received
+    try: await ctx.message.add_reaction("🔍")
+    except: pass
+
     target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
     media_parts = []
     
-    # Image extraction: Using the proper types.Part for the new GenAI library.
     if target.attachments:
         for attachment in target.attachments:
             if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
                 image_data = await attachment.read()
-                # Create a Part object to wrap image bytes.
                 media_parts.append(types.Part.from_bytes(data=image_data, mime_type='image/jpeg'))
 
+    # Nano-Prompt Re-engineering: Enforcing strict brevity and 1-2 sentence limits.
     prompt = (
-        f"CONTEXT: You are explaining a specific post to a user. Use '---SPLIT---' for long answers.\n"
-        f"MESSAGE CONTENT: {target.content}\n"
+        f"CONTEXT: Explain the following content concisely.\n"
+        f"CONTENT: {target.content}\n"
         f"INSTRUCTIONS:\n"
-        f"1. Explain what this message/image means in plain English.\n"
-        f"2. Identify any claims or assertions made.\n"
-        f"3. FACT CHECK: If a claim is made, verify its accuracy. If factually incorrect, "
-        f"provide correction and MUST include a link to a primary or highly reputable source.\n"
-        f"4. If an image is provided, identify manipulation or visual inaccuracy. Explain why."
+        f"1. Summarize exactly what this is saying in 1-2 short, clear sentences. DO NOT use paragraphs.\n"
+        f"2. Check for misinformation. If incorrect, concisely state why and link a single credible/primary source.\n"
+        f"3. Strict brevity: Avoid walls of text. If there is no misinformation, simply provide the summary."
     )
     
     await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts)
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
-    """Moggboard Logic: Win/Loss ratio sorting."""
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
@@ -193,7 +185,6 @@ async def moggboard(ctx):
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
-    """Checks key health and daily consumption."""
     now = datetime.now()
     usage = load_json_data("usage_stats.json").get(now.strftime('%Y-%m-%d'), {})
     msg = "### 🔑 API Key & Quota Status\n"
@@ -231,7 +222,6 @@ async def update(ctx):
     sys.exit(0)
 
 async def fetch_history(ctx, args):
-    """Aggregates history based on links, replies, or counts."""
     raw_input = args.strip()
     transcript_list = []
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
@@ -255,7 +245,6 @@ async def fetch_history(ctx, args):
     return transcript_list
 
 async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None):
-    """Handles key rotation and refined error checking."""
     async with ctx.typing():
         response = None
         used_model = ""
@@ -270,7 +259,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     client = genai.Client(api_key=key)
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
                     used_model = model_name
-                    # Stats logging
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
@@ -282,7 +270,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                         exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
                         continue
                     else:
-                        # REPORT ACTUAL BUGS: Don't swallow bad payloads as rate limits.
                         log_info(f"API Error ({model_name}): {e}")
                         return await ctx.send(f"⚠️ **API Error:** `{e}`")
                 except Exception as e:
