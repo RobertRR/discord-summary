@@ -7,7 +7,8 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v4.2 🚀"
+# v4.3 "Vibe Auditor" - Now tracks user reactions and reports token usage metadata.
+BOT_VERSION = "v4.3 - Vibe Auditor 📊"
 
 # --- LOGGING ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -69,13 +70,13 @@ bot.remove_command('help')
 
 @bot.event
 async def on_ready():
-    log_info(f"--- {bot.user.name} ONLINE (Version {BOT_VERSION}) ---")
+    log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f:
                 channel = await bot.fetch_channel(int(f.read().strip()))
-                if channel: await channel.send(f"✅ **Update Completed:** Logic updated. Version: **{BOT_VERSION}**")
+                if channel: await channel.send(f"✅ **Update Completed:** I am now running **{BOT_VERSION}**")
         except: pass
         finally: os.remove(update_file)
 
@@ -93,6 +94,11 @@ def get_rank_class(ratio):
     return "Uncalibrated"
 
 # --- CORE LOGIC ---
+
+@bot.command(name="version")
+async def version(ctx):
+    """Displays the current running version and its fun name."""
+    await ctx.send(f"🤖 **Current Version:** `{BOT_VERSION}`")
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
@@ -122,7 +128,7 @@ async def keystatus(ctx):
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
-    await ctx.send("🔄 Pulling latest from GitHub and recycling...")
+    await ctx.send(f"🔄 Pulling latest code for **{BOT_VERSION}** and recycling container...")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
@@ -131,7 +137,7 @@ async def fetch_history(ctx, args):
     transcript_list = []
     base_url = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/"
 
-    # Resolve message targets (Links, Replies, or Range)
+    # Resolve message targets
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
     if len(links) >= 2:
         s_id, e_id = sorted([int(links[0]), int(links[1])])
@@ -158,7 +164,7 @@ async def fetch_history(ctx, args):
             
         transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}{rx_str}")
     
-    return transcript_list if not links and not ctx.message.reference else transcript_list
+    return transcript_list
 
 async def process_ai_request(ctx, prompt, title, update_stats=False):
     async with ctx.typing():
