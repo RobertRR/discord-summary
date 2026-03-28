@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.0 - Token Safeguards & Time Caps 🛡️⏳
-# Implements 24h limit on history fetches to prevent token exhaustion.
-BOT_VERSION = "v4.0 🛡️⏳"
+# v4.1 - Precision Anchors & Link Parsing ⚓🔗
+# Adds support for Start/End message links in !tldr and !arguments.
+BOT_VERSION = "v4.1 ⚓🔗"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -119,10 +119,10 @@ async def help_command(ctx):
         "### 🤖 Bot Commands\n"
         "* **!version**\n"
         "  Shows the current build version.\n\n"
-        "* **!tldr [amount]**\n"
-        "  Grouped summaries. (Max 24h). Reply to a message to start there.\n\n"
-        "* **!arguments [amount]**\n"
-        "  Conflict analysis. (Max 24h). Reply to a message to start there.\n\n"
+        "* **!tldr [links/amount]**\n"
+        "  Grouped summaries. Supports **start/end links**, **replies**, or **time**.\n\n"
+        "* **!arguments [links/amount]**\n"
+        "  Conflict analysis. Supports **start/end links**, **replies**, or **time**.\n\n"
         "* **!moggboard**\n"
         "  View server dominance hierarchy.\n\n"
         "* **!keystatus**\n"
@@ -141,17 +141,6 @@ async def help_command(ctx):
 @bot.command(name="version")
 async def version(ctx):
     await ctx.send(f"Current Build: **{BOT_VERSION}**")
-
-@bot.command(name="botlog")
-async def botlog(ctx):
-    if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Access Denied.")
-    try:
-        with open("bot_terminal.log", "r") as f:
-            lines = f.readlines()
-            last_lines = "".join(lines[-10:])
-            await ctx.send(f"```\n{last_lines}\n```")
-    except Exception as e:
-        await ctx.send(f"Could not read log: {e}")
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
@@ -196,22 +185,35 @@ async def update(ctx):
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
-async def get_ai_response_async(model, prompt):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
-
 async def fetch_history(ctx, args):
-    raw_input = args.lower()
-    numbers = re.findall(r'\d+', raw_input)
-    value = int(numbers[0]) if numbers else 50
+    raw_input = args.strip()
     transcript_list = []
     base_url = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/"
 
-    # Contextual Replies take priority
+    # FEATURE: Start/End Link Parsing
+    links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
+    if len(links) >= 2:
+        try:
+            start_id, end_id = sorted([int(links[0]), int(links[1])])
+            start_msg = await ctx.channel.fetch_message(start_id)
+            end_msg = await ctx.channel.fetch_message(end_id)
+            
+            # Fetch between links (inclusive)
+            async for msg in ctx.channel.history(after=start_msg.created_at, before=end_msg.created_at, oldest_first=True, limit=300):
+                if msg.author.bot: continue
+                transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
+            
+            # Add start/end explicitly
+            transcript_list.insert(0, f"USER: {start_msg.author.display_name} | LINK: {base_url}{start_msg.id} | MSG: {start_msg.content}")
+            transcript_list.append(f"USER: {end_msg.author.display_name} | LINK: {base_url}{end_msg.id} | MSG: {end_msg.content}")
+            return transcript_list
+        except Exception as e:
+            log_info(f"Link Fetch Failed: {e}")
+
+    # Reply Context
     if ctx.message.reference:
         try:
             replied_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-            # Fetch with a hard cap of 200 messages for safety
             async for msg in ctx.channel.history(after=replied_msg.created_at, oldest_first=True, limit=200):
                 if msg.author.bot: continue
                 transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
@@ -219,20 +221,19 @@ async def fetch_history(ctx, args):
             return transcript_list
         except: pass
 
-    # Time-based fetch with Safeguard
-    if any(k in raw_input for k in ["min", "hour", "hr"]):
-        delta_minutes = value if "min" in raw_input else value * 60
-        if delta_minutes > 1440:  # 1440 mins = 24 hours
+    # Time/Amount Logic
+    numbers = re.findall(r'\d+', raw_input)
+    value = int(numbers[0]) if numbers else 50
+    if any(k in raw_input.lower() for k in ["min", "hour", "hr"]):
+        delta_minutes = value if "min" in raw_input.lower() else value * 60
+        if delta_minutes > 1440:
             await ctx.reply("⚠️ Safeguards have been put in place that limit requests to 24h to prevent the tokens from being exhausted.")
             return None
-        
-        delta = timedelta(minutes=delta_minutes)
-        async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
+        async for msg in ctx.channel.history(after=discord.utils.utcnow() - timedelta(minutes=delta_minutes), oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
             transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
     else:
-        # Amount-based fetch
-        async for msg in ctx.channel.history(limit=min(value, 300) + 10): # Safety cap of 300 msg
+        async for msg in ctx.channel.history(limit=min(value, 300) + 10):
             if msg.author.bot or msg.id == ctx.message.id: continue
             transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
             if len(transcript_list) >= value: break
@@ -246,7 +247,7 @@ async def tldr(ctx, *, args: str = "50"):
     try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
-    if transcript is None: return # Handled by safeguard message
+    if transcript is None: return
     if not transcript: return await ctx.send("No messages found.")
     
     history_text = "\n".join(transcript)
@@ -271,7 +272,7 @@ async def arguments(ctx, *, args: str = "50"):
     try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
-    if transcript is None: return # Handled by safeguard message
+    if transcript is None: return
     if not transcript: return await ctx.send("No messages found.")
     
     history_text = "\n".join(transcript)
@@ -284,6 +285,10 @@ async def arguments(ctx, *, args: str = "50"):
         f"TRANSCRIPT:\n{history_text}"
     )
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
+
+async def get_ai_response_async(model, prompt):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
     async with ctx.typing():
@@ -301,7 +306,6 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
-                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
