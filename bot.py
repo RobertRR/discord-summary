@@ -1,15 +1,15 @@
 import discord
 from discord.ext import commands
-import google.generativeai as genai
-from google.api_core import exceptions
+from google import genai  # NEW SDK
+from google.genai import errors # NEW Errors
 import re, asyncio, functools, sys, os, json, logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.1 - Precision Anchors & Link Parsing ⚓🔗
-# Adds support for Start/End message links in !tldr and !arguments.
-BOT_VERSION = "v4.1 ⚓🔗"
+# v4.2 - The GenAI Migration 🚀
+# Migrates from deprecated google.generativeai to the new google.genai SDK.
+BOT_VERSION = "v4.2 🚀"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -61,6 +61,7 @@ ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
 # --- API & QUOTA CONFIG ---
 exhausted_tracker = {} 
+# Note: Ensure these model names are supported by the new SDK
 MODEL_CHAIN = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 
 DAILY_LIMITS = {
@@ -69,12 +70,6 @@ DAILY_LIMITS = {
     'gemini-2.5-flash': 20,
     'gemini-3.1-flash-lite-preview': 100
 }
-
-def configure_genai(key_index):
-    genai.configure(api_key=ALL_KEYS[key_index])
-
-if ALL_KEYS:
-    configure_genai(0)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -190,27 +185,20 @@ async def fetch_history(ctx, args):
     transcript_list = []
     base_url = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/"
 
-    # FEATURE: Start/End Link Parsing
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
     if len(links) >= 2:
         try:
             start_id, end_id = sorted([int(links[0]), int(links[1])])
             start_msg = await ctx.channel.fetch_message(start_id)
             end_msg = await ctx.channel.fetch_message(end_id)
-            
-            # Fetch between links (inclusive)
             async for msg in ctx.channel.history(after=start_msg.created_at, before=end_msg.created_at, oldest_first=True, limit=300):
                 if msg.author.bot: continue
                 transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
-            
-            # Add start/end explicitly
             transcript_list.insert(0, f"USER: {start_msg.author.display_name} | LINK: {base_url}{start_msg.id} | MSG: {start_msg.content}")
             transcript_list.append(f"USER: {end_msg.author.display_name} | LINK: {base_url}{end_msg.id} | MSG: {end_msg.content}")
             return transcript_list
-        except Exception as e:
-            log_info(f"Link Fetch Failed: {e}")
+        except: pass
 
-    # Reply Context
     if ctx.message.reference:
         try:
             replied_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
@@ -221,7 +209,6 @@ async def fetch_history(ctx, args):
             return transcript_list
         except: pass
 
-    # Time/Amount Logic
     numbers = re.findall(r'\d+', raw_input)
     value = int(numbers[0]) if numbers else 50
     if any(k in raw_input.lower() for k in ["min", "hour", "hr"]):
@@ -238,7 +225,6 @@ async def fetch_history(ctx, args):
             transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
             if len(transcript_list) >= value: break
         transcript_list.reverse()
-    
     return transcript_list
 
 @bot.command(name="tldr")
@@ -286,10 +272,6 @@ async def arguments(ctx, *, args: str = "50"):
     )
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
-async def get_ai_response_async(model, prompt):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, functools.partial(model.generate_content, prompt))
-
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
     async with ctx.typing():
         response = None
@@ -302,21 +284,33 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
             for i in range(len(ALL_KEYS)):
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
-                    configure_genai(i)
-                    current_model = genai.GenerativeModel(model_name)
-                    response = await get_ai_response_async(current_model, prompt)
+                    # NEW: SDK Client setup
+                    client = genai.Client(api_key=ALL_KEYS[i])
+                    
+                    # NEW: Sync-to-Async Thread Wrapper
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=prompt
+                    )
                     used_model = model_name
+                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
                     data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
-                except exceptions.ResourceExhausted:
-                    exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
+                except errors.ClientError as e:
+                    # NEW: Quota rotation parsing
+                    err_str = str(e)
+                    if "429" in err_str:
+                        exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
+                    elif "403" in err_str:
+                        log_info(f"Key {i} Invalid/Forbidden.")
                     continue
                 except Exception as e:
-                    log_info(f"Error: {e}"); continue
+                    log_info(f"API Error: {e}"); continue
             if response: break
             
         if not response: return await ctx.send("🔄 Quotas Exhausted.")
