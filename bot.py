@@ -7,8 +7,8 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.3.1 "Vibe Auditor" - Now tracks user reactions and reports token usage metadata.
-BOT_VERSION = "v4.3.1 - Vibe Auditor 📊"
+# v4.6 "Vibe Interpreter" - Clarified reaction extraction logic and improved maintainer docs.
+BOT_VERSION = "v4.6 - Vibe Interpreter 👁️"
 
 # --- LOGGING ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -31,6 +31,7 @@ def load_file(filename):
         with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
+        log_info(f"CRITICAL: {filename} missing.")
         return []
 
 def load_json_data(filename):
@@ -47,7 +48,7 @@ def save_json_data(filename, data):
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
             f.flush()
-            os.fsync(f.fileno())
+            os.fsync(f.fileno()) # Prevents data corruption on NUC power loss.
     except Exception as e:
         log_info(f"Save Failed: {e}")
 
@@ -63,8 +64,8 @@ DAILY_LIMITS = {'gemini-3.1-pro-preview': 5, 'gemini-3-flash-preview': 50, 'gemi
 
 # --- BOT SETUP ---
 intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
+intents.message_content = True 
+intents.members = True         
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
 
@@ -80,7 +81,7 @@ async def on_ready():
         except: pass
         finally: os.remove(update_file)
 
-# --- RANKING ---
+# --- RANKING SYSTEM ---
 def get_rank_class(ratio):
     r = ratio * 100
     if r >= 99.5: return "Immortal"
@@ -93,11 +94,10 @@ def get_rank_class(ratio):
     if r > 0: return "Herald"
     return "Uncalibrated"
 
-# --- CORE LOGIC ---
+# --- COMMANDS ---
 
 @bot.command(name="version")
 async def version(ctx):
-    """Displays the current running version and its fun name."""
     await ctx.send(f"🤖 **Current Version:** `{BOT_VERSION}`")
 
 @bot.command(name="moggboard")
@@ -105,6 +105,7 @@ async def moggboard(ctx):
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
+    
     sorted_users = sorted(server_data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
     msg = f"## 👑 {ctx.guild.name.upper()} MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
@@ -135,9 +136,8 @@ async def update(ctx):
 async def fetch_history(ctx, args):
     raw_input = args.strip()
     transcript_list = []
-    base_url = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/"
-
-    # Resolve message targets
+    
+    # Target resolution logic
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
     if len(links) >= 2:
         s_id, e_id = sorted([int(links[0]), int(links[1])])
@@ -147,23 +147,20 @@ async def fetch_history(ctx, args):
     else:
         numbers = re.findall(r'\d+', raw_input)
         val = int(numbers[0]) if numbers else 50
-        if "min" in raw_input.lower() or "hour" in raw_input.lower():
-            mins = val if "min" in raw_input.lower() else val * 60
-            target_history = ctx.channel.history(after=discord.utils.utcnow() - timedelta(minutes=mins), oldest_first=True)
-        else:
-            target_history = ctx.channel.history(limit=min(val, 300))
+        target_history = ctx.channel.history(limit=min(val, 300))
 
     async for msg in target_history:
         if msg.author.bot or msg.id == ctx.message.id: continue
         
-        # --- REACTION LOGIC ---
+        # --- REACTION EXTRACTION ---
+        # We transform Discord's reaction objects into plain text strings.
+        # This allows Gemini to "see" group sentiment (e.g. laughing vs. anger).
         rx_str = ""
         if msg.reactions:
             rx_list = [f"{str(r.emoji)}x{r.count}" for r in msg.reactions]
             rx_str = f" (REACTIONS: {', '.join(rx_list)})"
             
         transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}{rx_str}")
-    
     return transcript_list
 
 async def process_ai_request(ctx, prompt, title, update_stats=False):
@@ -181,7 +178,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=prompt)
                     used_model = model_name
                     
-                    # Update Usage Stats
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
@@ -189,20 +185,22 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                     save_json_data("usage_stats.json", data)
                     break 
                 except errors.ClientError as e:
-                    if "429" in str(e): exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
+                    if "429" in str(e): 
+                        exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
                     continue
                 except: continue
             if response: break
             
         if not response: return await ctx.send("🔄 All keys rate-limited.")
         
-        # --- TOKEN AUDIT ---
         meta = response.usage_metadata
         token_info = f"📊 **Token Audit:** `In: {meta.prompt_token_count}` | `Out: {meta.candidates_token_count}` | `Total: {meta.total_token_count}`"
 
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
         
+        # --- MOGG UPDATER & LEDGER ---
+        mogg_msg = ""
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
@@ -215,12 +213,15 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                 m_data[s_id][w]["wins"] += 1
                 m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
+                
+                mogg_msg = f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} (+1W) | **Loser:** {l} (+1L)\n* **Updated:** `{w}: {m_data[s_id][w]['wins']}W` | `{l}: {m_data[s_id][l]['losses']}L`"
 
         for s in sections:
             content = s.strip()
             if content and "WINNER:" not in content:
                 for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
         
+        if mogg_msg: await ctx.send(mogg_msg)
         await ctx.send(token_info)
 
 @bot.command(name="tldr")
@@ -232,14 +233,14 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return
     
-    # --- ENHANCED BULLET POINT PROMPT ---
     prompt = (
         f"Summarize the conversation clearly. Use '---SPLIT---' between sections.\n"
-        f"Emojis in transcript are user reactions; use them to gauge sentiment.\n\n"
+        f"IMPORTANT: The transcript includes user reactions (e.g. 😂x3). Use these as social proof "
+        f"to gauge humor, agreement, or tension.\n\n"
         f"# 📝 SUMMARIES\n"
-        f"Group by user display name. Format: **[Name]**: followed by a list of bullet points detailing their actions or points made.\n\n"
+        f"Group by user display name. Format: **[Name]**: [bullet points].\n\n"
         f"# 📈 CORTISOL SPIKES\n"
-        f"Note any toxic behavior or high-tension arguments.\n\n"
+        f"Concise notes on toxic behavior or arguments. Keep it brief.\n\n"
         f"# MOGG DATA (INTERNAL)\n"
         f"WINNER: [Name] | LOSER: [Name]\n\n"
         f"TRANSCRIPT:\n" + "\n".join(transcript)
