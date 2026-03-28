@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.7.3 - Restored all maintainer comments and hardened documentation.
-# Major: 4 | Minor: 7 | Subminor: 3
-BOT_VERSION = "v4.7.3 - Documentation Hardening 🛡️"
+# v4.7.4 - Cache Buster Edition. Bumped to verify fix for stale GitHub pulls.
+# Major: 4 | Minor: 7 | Subminor: 4
+BOT_VERSION = "v4.7.4 - Cache Buster Edition ⚡"
 
 # --- GLOBAL START TIME ---
 # Used for uptime tracking in the !version command.
