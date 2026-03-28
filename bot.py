@@ -7,7 +7,8 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-BOT_VERSION = "v3.7 📋✨"
+# v3.8 - Multi-Server Moggboard & Grouped Summaries 🏛️📊
+BOT_VERSION = "v3.8 🏛️📊"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -109,7 +110,7 @@ def get_rank_class(ratio):
     if r >= 30: return "Crusader"
     if r >= 15: return "Guardian"
     if r > 0: return "Herald"
-    return "Unranked"
+    return "Uncalibrated"
 
 @bot.command(name="help")
 async def help_command(ctx):
@@ -118,17 +119,17 @@ async def help_command(ctx):
         "* **!version**\n"
         "  Shows the current build version.\n\n"
         "* **!tldr [amount]**\n"
-        "  Summaries + **Cortisol Spike** detection.\n\n"
+        "  Grouped Summaries + **Cortisol Spike** detection.\n\n"
         "* **!arguments [amount]**\n"
-        "  Conflict Analysis and Mogg updates.\n\n"
+        "  In-depth Conflict Analysis and Mogg updates.\n\n"
         "* **!moggboard**\n"
-        "  View the server's dominance hierarchy.\n\n"
+        "  View this server's specific dominance hierarchy.\n\n"
         "* **!keystatus**\n"
         "  Check API health and daily quotas.\n\n"
         "---\n"
         "### 🛡️ Admin Commands\n"
         "* **!clearmogs**\n"
-        "  Resets Moggboard data to zero.\n\n"
+        "  Resets this server's Moggboard data.\n\n"
         "* **!botlog**\n"
         "  Displays the last 10 lines of the terminal log.\n\n"
         "* **!update**\n"
@@ -153,10 +154,14 @@ async def botlog(ctx):
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
-    data = load_json_data("mogg_stats.json")
-    if not data: return await ctx.send("The Moggboard is empty.")
-    sorted_users = sorted(data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
-    msg = "## 👑 THE OFFICIAL MOGGBOARD\n"
+    all_data = load_json_data("mogg_stats.json")
+    guild_id = str(ctx.guild.id)
+    server_data = all_data.get(guild_id, {})
+    
+    if not server_data: return await ctx.send("The Moggboard for this server is empty.")
+    
+    sorted_users = sorted(server_data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
+    msg = f"## 👑 {ctx.guild.name.upper()} MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
         w, l = stats['wins'], stats['losses']
         ratio = (w / (w+l) if (w+l)>0 else 0)
@@ -167,8 +172,10 @@ async def moggboard(ctx):
 @bot.command(name="clearmogs")
 async def clearmogs(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Admin only.")
-    save_json_data("mogg_stats.json", {})
-    await ctx.send("🗑️ **Moggboard Reset.**")
+    all_data = load_json_data("mogg_stats.json")
+    all_data[str(ctx.guild.id)] = {}
+    save_json_data("mogg_stats.json", all_data)
+    await ctx.send(f"🗑️ **Moggboard Reset for {ctx.guild.name}.**")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -180,7 +187,7 @@ async def keystatus(ctx):
         available = len(ALL_KEYS) - dead_count
         used = usage.get(model, 0)
         total_limit = DAILY_LIMITS.get(model, 0) * len(ALL_KEYS)
-        msg += f"* **{model}**\n  └ Rate: `{available}/{len(ALL_KEYS)}` keys ready | Daily: `{used}/{total_limit}` used\n"
+        msg += f"* **{model}**\n  └ Rate: `{available}/{len(ALL_KEYS)}` ready | Daily: `{used}/{total_limit}` used\n"
     await ctx.send(msg)
 
 @bot.command(name="update")
@@ -222,7 +229,19 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     history_text = "\n".join(transcript)
-    prompt = f"Summarize transcript.\n# 📝 SUMMARIES\nBullet points.\n# 📈 CORTISOL SPIKES\nIdentify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n# MOGG DATA (INTERNAL)\nFormat: 'WINNER: [Name] | LOSER: [Name]'\nRULES: Use '---SPLIT---' between sections.\n\nTRANSCRIPT:\n{history_text}"
+    prompt = (
+        f"Summarize the following transcript. "
+        f"CRITICAL: The '# 📝 SUMMARIES' section must be grouped by user display name.\n"
+        f"# 📝 SUMMARIES\n"
+        f"Grouped by User Display Name:\n"
+        f"- [User Name]: bullet points of their contributions.\n"
+        f"# 📈 CORTISOL SPIKES\n"
+        f"Identify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n"
+        f"# MOGG DATA (INTERNAL)\n"
+        f"Format: 'WINNER: [Name] | LOSER: [Name]'\n"
+        f"RULES: Use '---SPLIT---' between these 3 sections.\n\n"
+        f"TRANSCRIPT:\n{history_text}"
+    )
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
 @bot.command(name="arguments")
@@ -233,7 +252,14 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     history_text = "\n".join(transcript)
-    prompt = f"Analyze for arguments. Use '---SPLIT---' between these 4: 1. Summary 2. Key Points 3. Verdict 4. Mogg Data (Format: 'WINNER: [Name] | LOSER: [Name]')\n\nTRANSCRIPT:\n{history_text}"
+    prompt = (
+        f"Analyze the transcript for arguments. Use '---SPLIT---' between these 4 sections:\n"
+        f"1. # 📜 ARGUMENT SUMMARY - Brief overview of what happened.\n"
+        f"2. # 🔍 PER-POINT REVIEW - Detailed breakdown of claims made.\n"
+        f"3. # ⚖️ FINAL VERDICT - Decisive resolution. Explicitly state: '[Name] wins and [Name] loses.'\n"
+        f"4. MOGG DATA (INTERNAL) - Format: 'WINNER: [Name] | LOSER: [Name]'\n\n"
+        f"TRANSCRIPT:\n{history_text}"
+    )
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
@@ -241,6 +267,8 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
         response = None
         used_model = ""
         now = datetime.now()
+        guild_id = str(ctx.guild.id)
+        
         for model_name in MODEL_CHAIN:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i in range(len(ALL_KEYS)):
@@ -250,6 +278,7 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
                     current_model = genai.GenerativeModel(model_name)
                     response = await get_ai_response_async(current_model, prompt)
                     used_model = model_name
+                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
@@ -262,19 +291,29 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
                 except Exception as e:
                     log_info(f"Error: {e}"); continue
             if response: break
+            
         if not response: return await ctx.send("🔄 Quotas Exhausted.")
+        
         await ctx.send(f"### {title_prefix} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
+        
         if update_stats:
             mogg_section = sections[-1] if len(sections) >= 3 else ""
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", mogg_section, re.IGNORECASE)
             if match:
                 winner, loser = match.group(1).strip().rstrip('.,!'), match.group(2).strip().rstrip('.,!')
-                data = load_json_data("mogg_stats.json")
+                all_data = load_json_data("mogg_stats.json")
+                
+                # Initialize guild data if missing
+                if guild_id not in all_data: all_data[guild_id] = {}
+                
                 for p in [winner, loser]:
-                    if p not in data: data[p] = {"wins": 0, "losses": 0}
-                data[winner]["wins"] += 1; data[loser]["losses"] += 1
-                save_json_data("mogg_stats.json", data)
+                    if p not in all_data[guild_id]: all_data[guild_id][p] = {"wins": 0, "losses": 0}
+                
+                all_data[guild_id][winner]["wins"] += 1
+                all_data[guild_id][loser]["losses"] += 1
+                save_json_data("mogg_stats.json", all_data)
+                
         for s in sections:
             content = s.strip()
             if content and "WINNER:" not in content:
