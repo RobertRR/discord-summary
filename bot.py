@@ -226,15 +226,23 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
-    # --- REACTION RESTORED ---
     try: await ctx.message.add_reaction("✅")
     except: pass
     
     transcript = await fetch_history(ctx, args)
     if not transcript: return
+    
+    # --- ENHANCED BULLET POINT PROMPT ---
     prompt = (
-        f"Summarize conversation. Use '---SPLIT---' between sections. Emojis in transcript are reactions from the group; use them to gauge sentiment.\n"
-        f"# 📝 SUMMARIES\nGroup by user name.\n# 📈 CORTISOL SPIKES\nNote any toxicity.\n# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\nTRANSCRIPT:\n" + "\n".join(transcript)
+        f"Summarize the conversation clearly. Use '---SPLIT---' between sections.\n"
+        f"Emojis in transcript are user reactions; use them to gauge sentiment.\n\n"
+        f"# 📝 SUMMARIES\n"
+        f"Group by user display name. Format: **[Name]**: followed by a list of bullet points detailing their actions or points made.\n\n"
+        f"# 📈 CORTISOL SPIKES\n"
+        f"Note any toxic behavior or high-tension arguments.\n\n"
+        f"# MOGG DATA (INTERNAL)\n"
+        f"WINNER: [Name] | LOSER: [Name]\n\n"
+        f"TRANSCRIPT:\n" + "\n".join(transcript)
     )
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
