@@ -7,8 +7,8 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.3 "Vibe Auditor" - Now tracks user reactions and reports token usage metadata.
-BOT_VERSION = "v4.3 - Vibe Auditor 📊"
+# v4.3.1 "Vibe Auditor" - Now tracks user reactions and reports token usage metadata.
+BOT_VERSION = "v4.3.1 - Vibe Auditor 📊"
 
 # --- LOGGING ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
