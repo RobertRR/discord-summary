@@ -226,6 +226,10 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
+    # --- REACTION RESTORED ---
+    try: await ctx.message.add_reaction("✅")
+    except: pass
+    
     transcript = await fetch_history(ctx, args)
     if not transcript: return
     prompt = (
