@@ -3,18 +3,18 @@
 A lightweight, Dockerized Discord bot that summarizes channel conversations using Google's Gemini AI. It features **intelligent API key rotation**, **multi-model fallback**, and **self-updating capabilities**.
 
 ---
-
 ## 🌟 Features
 
 * **Smart Summaries:** Grouped by user with clean, underlined headers and bullet points.
-* **👑 The Moggboard:** A competitive dominance hierarchy. The AI analyzes arguments (`!arguments`), declares a winner, and ranks users based on their win/loss ratio and custom RPG-style classes (Immortal, Divine, etc.).
-* **Argument Solver:** Read the chat history, find out who was arguing and pick a winner.
-* **API Key Rotation:** Automatically cycles through multiple Gemini API keys to maximize free-tier quotas.
+* **👑 Multi-Server Moggboard:** A competitive dominance hierarchy. The AI analyzes arguments, declares a winner, and ranks users based on their win/loss ratio. Data is partitioned by Server ID, allowing independent rankings across multiple servers.
+* **Precision Anchors:** Use **Discord Message Links** to set exact start and end points for a summary.
+* **Contextual Replies:** Simply **reply** to any message with `!tldr` to summarize everything from that specific point forward.
+* **Token Safeguards:** Built-in limits (24h time cap / 300 message cap) to prevent runaway token usage and API exhaustion.
+* **API Key Rotation:** Automatically cycles through multiple Gemini API keys to maximize free-tier quotas with a 65-second "cool-off" for rate-limited keys.
 * **Model Fallback:** Automatically tries higher-tier models (3.1 Pro) before falling back to faster, lighter models.
 * **Self-Updating:** Admin-only `!update` command pulls the latest code from GitHub and restarts the container instantly.
-* **Flexible TLDR:** Supports message counts (`!tldr 50`) or timeframes (`!tldr 30min`, `!tldr 1hr`).
-* **Log Rotation:** Built-in logging that limits file size to 5MB to save server space.
-
+* **Flexible TLDR:** Supports message counts (`!tldr 50`), timeframes (`!tldr 30min`), or specific links.
+* 
 ---
 
 ## 🛠 Commands
@@ -22,11 +22,13 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations usin
 | Command | Description | Access |
 | :--- | :--- | :--- |
 | `!help` | Displays the help menu and command list. | Everyone |
-| `!tldr [val]` | Summarizes chat history with jump-links to key messages. | Everyone |
-| `!arguments [val]` | Analyzes conflicts, settles verdicts, and updates the Moggboard. | Everyone |
-| `!moggboard` | Displays the server's dominance hierarchy and rankings. | Everyone |
-| `!keystatus` | Shows API health, cooldown timers, and remaining daily usage. | Everyone |
-| `!clearmogs` | **(Admin Only)** Resets all Moggboard statistics to zero. | **Admins** |
+| `!tldr [val/links]` | Summarizes history. Supports **count**, **time**, **links**, or **replies**. | Everyone |
+| `!arguments [val/links]` | Analyzes conflicts and updates the Moggboard. Supports **links/replies**. | Everyone |
+| `!moggboard` | Displays the current server's dominance hierarchy and rankings. | Everyone |
+| `!keystatus` | Shows API health, cooldown timers, and daily usage per model. | Everyone |
+| `!version` | Displays the current build version (e.g., `v4.1`). | Everyone |
+| `!botlog` | **(Admin Only)** Displays the last 10 lines of the terminal log. | **Admins** |
+| `!clearmogs` | **(Admin Only)** Resets Moggboard stats for the **current server only**. | **Admins** |
 | `!update` | **(Admin Only)** Pulls the latest code and restarts the bot. | **Admins** |
 
 
