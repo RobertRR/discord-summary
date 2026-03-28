@@ -6,6 +6,8 @@ services:
     volumes:
       - /projects/discord-summary:/app
     working_dir: /app
+    environment:
+      - TZ=Australia/Sydney
     healthcheck:
       test:
         - CMD-SHELL
@@ -15,9 +17,15 @@ services:
       retries: 3
     command: >
       sh -c "apt-get update && apt-get install -y curl procps && 
-             pip install --no-cache-dir discord.py google-generativeai youtube-transcript-api && 
-             curl -H 'Cache-Control: no-cache, no-store' -sSL 'https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py?nocache=$$(date +%s)' -o bot.py.tmp && 
-             mv -f bot.py.tmp bot.py && 
-             sync && 
-             python -u bot.py"
+             python -m pip install --upgrade pip && 
+             pip install --no-cache-dir discord.py google-genai youtube-transcript-api && 
+             while true; do 
+               echo 'Fetching code...';
+               curl -sSL 'https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py' -o bot.py.tmp && 
+               mv -f bot.py.tmp bot.py && 
+               sync && 
+               python -u bot.py; 
+               echo 'Restarting loop in 5s...';
+               sleep 5; 
+             done"
 networks: {}
