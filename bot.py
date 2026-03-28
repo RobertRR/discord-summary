@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.7.5 - Maintainer Logic Lock. Restored ALL technical comments and admin suite.
-# Major: 4 | Minor: 7 | Subminor: 6
-BOT_VERSION = "v4.7.6 - Help Fixer ⚡"
+# v4.7.7 - Documentation & Context Update. Expanded comments and added !huh logic.
+# Major: 4 | Minor: 7 | Subminor: 7
+BOT_VERSION = "v4.7.7 - Documentation & Context ⚡"
 
 # --- GLOBAL START TIME ---
 # Used for uptime tracking in the !version command.
@@ -111,13 +111,18 @@ def get_rank_class(ratio):
 
 @bot.command(name="help")
 async def help_command(ctx):
-    """Legacy styled help menu for v4.7.5 core features."""
+    """
+    Custom Help Menu: Uses legacy formatting with dual sections.
+    Note: Spacing is intentional to match original Discord visual style.
+    """
     help_text = (
         "🤖 **Bot Commands**\n"
         "**`!version`**\n"
         "Shows the current build version.\n\n"
         "**`!tldr [amount]`**\n"
         "Summaries + Cortisol Spike detection.\n\n"
+        "**`!huh`**\n"
+        "Reply to a message to explain content and fact-check claims.\n\n"
         "**`!arguments [amount]`**\n"
         "Conflict Analysis and Mogg updates.\n\n"
         "**`!moggboard`**\n"
@@ -137,19 +142,55 @@ async def help_command(ctx):
 
 @bot.command(name="version")
 async def version(ctx):
-    """Calculates and displays current version and process uptime."""
+    """Uptime calculation: Uses the global START_TIME established at boot."""
     delta = datetime.now() - START_TIME
     hours, remainder = divmod(int(delta.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours}h {minutes}m {seconds}s"
     await ctx.send(f"🤖 **Current Version:** `{BOT_VERSION}`\n⏱️ **Uptime:** `{uptime_str}`")
 
+@bot.command(name="huh")
+async def huh(ctx):
+    """
+    Contextual Fact-Checker: This command requires a reply (ctx.message.reference).
+    It extracts text, links, and image attachments from the target message
+    and prompts Gemini to verify claims and explain the content.
+    """
+    if not ctx.message.reference:
+        return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
+    
+    # Fetch the target message that is being replied to
+    target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+    media_parts = []
+    
+    # Image extraction: Checks attachments for compatible image formats
+    if target.attachments:
+        for attachment in target.attachments:
+            if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
+                image_data = await attachment.read()
+                media_parts.append({'mime_type': 'image/jpeg', 'data': image_data})
+
+    # Fact-check prompt: Specific instructions for veracity and sourcing.
+    prompt = (
+        f"CONTEXT: You are explaining a specific post to a user. Use '---SPLIT---' for long answers.\n"
+        f"MESSAGE CONTENT: {target.content}\n"
+        f"INSTRUCTIONS:\n"
+        f"1. Explain what this message/image means in plain English.\n"
+        f"2. Identify any claims or assertions made.\n"
+        f"3. FACT CHECK: If a claim is made, verify its accuracy. If it is factually incorrect, "
+        f"provide a concise correction and MUST include a link to a primary or highly reputable source.\n"
+        f"4. If an image is provided, identify if it has been manipulated or is visually inaccurate. Explain why."
+    )
+    
+    await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts)
+
 @bot.command(name="moggboard")
 async def moggboard(ctx):
-    """Displays rankings based on wins/losses in chat arguments."""
+    """Moggboard Logic: Sorts by win ratio (W/W+L) then by total win count."""
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
+    
     sorted_users = sorted(server_data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
     msg = f"## 👑 {ctx.guild.name.upper()} MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
@@ -160,7 +201,7 @@ async def moggboard(ctx):
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
-    """Monitors API key health and daily usage across all keys."""
+    """Quota Tracker: Pulls usage from usage_stats.json and checks local exhaustion_tracker."""
     now = datetime.now()
     usage = load_json_data("usage_stats.json").get(now.strftime('%Y-%m-%d'), {})
     msg = "### 🔑 API Key & Quota Status\n"
@@ -173,7 +214,7 @@ async def keystatus(ctx):
 
 @bot.command(name="clearmogs")
 async def clearmogs(ctx):
-    """Admin tool to wipe server stats."""
+    """Admin Only: Deletes the guild's entry from the mogg_stats.json file."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     m_data = load_json_data("mogg_stats.json")
     if str(ctx.guild.id) in m_data:
@@ -183,7 +224,7 @@ async def clearmogs(ctx):
 
 @bot.command(name="botlog")
 async def botlog(ctx):
-    """Admin tool to view NUC runtime logs without SSH."""
+    """Admin Only: Reads the rolling log file. Limited to 10 lines to prevent Discord message overflow."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     try:
         with open("bot_terminal.log", "r") as f:
@@ -194,14 +235,17 @@ async def botlog(ctx):
 
 @bot.command(name="update")
 async def update(ctx):
-    """Triggers the environment restart logic. Confirmed version-agnostic pull message."""
+    """Update Flow: Saves the current channel ID to a text file before exiting so it can report success on reboot."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     await ctx.send("📡 **Fetching latest upstream code and recycling the container...**")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
 async def fetch_history(ctx, args):
-    """Aggregates chat data and converts reactions into readable text for the AI."""
+    """
+    History Aggregator: Support for relative counts (e.g. !tldr 50), 
+    direct message links (before/after), and message replies.
+    """
     raw_input = args.strip()
     transcript_list = []
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
@@ -226,20 +270,27 @@ async def fetch_history(ctx, args):
         transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}{rx_str}")
     return transcript_list
 
-async def process_ai_request(ctx, prompt, title, update_stats=False):
-    """Main AI handler. Manages key rotation, rate-limit cooling, and output sectioning."""
+async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None):
+    """
+    Key Switcher/Rate Limiter: Attempts to find a functional API key across the model chain.
+    Implements a 65s cooling period for keys that hit 429 errors.
+    """
     async with ctx.typing():
         response = None
         used_model = ""
         now = datetime.now()
+        
+        # Payload assembly: merges text prompt with any image data provided.
+        content_payload = [prompt] + (media_parts if media_parts else [])
+        
         for model_name in MODEL_CHAIN:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i, key in enumerate(ALL_KEYS):
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
                     client = genai.Client(api_key=key)
-                    # Offload to thread to keep the Discord heartbeat alive.
-                    response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=prompt)
+                    # Offload to thread to keep the Discord heartbeat alive during long AI inference.
+                    response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
                     used_model = model_name
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
@@ -255,7 +306,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
             if response: break
         if not response: return await ctx.send("🔄 All keys rate-limited.")
         
-        # Token Audit: Tracks the 'weight' of the summary request.
+        # Output Formatting: Splits responses by '---SPLIT---' to manage Discord's 2000char limit.
         meta = response.usage_metadata
         token_info = f"📊 **Token Audit:** `In: {meta.prompt_token_count}` | `Out: {meta.candidates_token_count}` | `Total: {meta.total_token_count}`"
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
@@ -263,6 +314,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
         sections = response.text.split("---SPLIT---")
         mogg_msg = ""
         if update_stats:
+            # Mogg Extraction: Looks for WINNER/LOSER keywords in the AI response to update scoreboard.
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
                 w, l = match.group(1).strip().rstrip('.,!'), match.group(2).strip().rstrip('.,!')
@@ -274,7 +326,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                 m_data[s_id][w]["wins"] += 1
                 m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
-                # Mogg Ledger: Added v4.4 to show scorecard alongside summary.
                 mogg_msg = f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} (+1W) | **Loser:** {l} (+1L)\n* **Updated:** `{w}: {m_data[s_id][w]['wins']}W` | `{l}: {m_data[s_id][l]['losses']}L`"
         
         for s in sections:
@@ -287,7 +338,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def tldr(ctx, *, args: str = "50"):
-    """Core summary feature with vibe detection and Mogg adjudication."""
+    """Summary feature: Prompts AI to group by name and find toxic spikes."""
     try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
@@ -308,7 +359,7 @@ async def tldr(ctx, *, args: str = "50"):
 @bot.command(name="arguments")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def arguments(ctx, *, args: str = "50"):
-    """Dedicated Mogg adjudication command."""
+    """Adjudication feature: Specifically forces Gemini to judge a conflict."""
     try: await ctx.message.add_reaction("⚖️")
     except: pass
     transcript = await fetch_history(ctx, args)
