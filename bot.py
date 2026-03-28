@@ -7,8 +7,13 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.6 "Vibe Interpreter" - Clarified reaction extraction logic and improved maintainer docs.
-BOT_VERSION = "v4.6 - Vibe Interpreter 👁️"
+# v4.7.1 - Fixed misleading version reporting and added uptime tracking.
+# Major: 4 (Features/Rewrites) | Minor: 7 (Enhancements) | Subminor: 1 (Bugfixes)
+BOT_VERSION = "v4.7.1 - Agile Deployer 🚀"
+
+# --- GLOBAL START TIME ---
+# Used to calculate uptime for the !version command.
+START_TIME = datetime.now()
 
 # --- LOGGING ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -48,7 +53,7 @@ def save_json_data(filename, data):
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
             f.flush()
-            os.fsync(f.fileno()) # Prevents data corruption on NUC power loss.
+            os.fsync(f.fileno()) 
     except Exception as e:
         log_info(f"Save Failed: {e}")
 
@@ -98,7 +103,16 @@ def get_rank_class(ratio):
 
 @bot.command(name="version")
 async def version(ctx):
-    await ctx.send(f"🤖 **Current Version:** `{BOT_VERSION}`")
+    """Displays current version, uptime, and core features."""
+    delta = datetime.now() - START_TIME
+    hours, remainder = divmod(int(delta.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+    
+    await ctx.send(
+        f"🤖 **Current Version:** `{BOT_VERSION}`\n"
+        f"⏱️ **Uptime:** `{uptime_str}`"
+    )
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
@@ -129,7 +143,7 @@ async def keystatus(ctx):
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
-    await ctx.send(f"🔄 Pulling latest code for **{BOT_VERSION}** and recycling container...")
+    await ctx.send("📡 **Fetching latest upstream code and recycling the container...**")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
@@ -137,7 +151,6 @@ async def fetch_history(ctx, args):
     raw_input = args.strip()
     transcript_list = []
     
-    # Target resolution logic
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
     if len(links) >= 2:
         s_id, e_id = sorted([int(links[0]), int(links[1])])
@@ -151,15 +164,10 @@ async def fetch_history(ctx, args):
 
     async for msg in target_history:
         if msg.author.bot or msg.id == ctx.message.id: continue
-        
-        # --- REACTION EXTRACTION ---
-        # We transform Discord's reaction objects into plain text strings.
-        # This allows Gemini to "see" group sentiment (e.g. laughing vs. anger).
         rx_str = ""
         if msg.reactions:
             rx_list = [f"{str(r.emoji)}x{r.count}" for r in msg.reactions]
             rx_str = f" (REACTIONS: {', '.join(rx_list)})"
-            
         transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}{rx_str}")
     return transcript_list
 
@@ -177,7 +185,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                     client = genai.Client(api_key=key)
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=prompt)
                     used_model = model_name
-                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
@@ -199,7 +206,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
         
-        # --- MOGG UPDATER & LEDGER ---
         mogg_msg = ""
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
@@ -229,10 +235,8 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
 async def tldr(ctx, *, args: str = "50"):
     try: await ctx.message.add_reaction("✅")
     except: pass
-    
     transcript = await fetch_history(ctx, args)
     if not transcript: return
-    
     prompt = (
         f"Summarize the conversation clearly. Use '---SPLIT---' between sections.\n"
         f"IMPORTANT: The transcript includes user reactions (e.g. 😂x3). Use these as social proof "
