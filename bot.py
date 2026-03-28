@@ -7,8 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v3.8 - Multi-Server Moggboard & Grouped Summaries 🏛️📊
-BOT_VERSION = "v3.8 🏛️📊"
+# v4.0 - Token Safeguards & Time Caps 🛡️⏳
+# Implements 24h limit on history fetches to prevent token exhaustion.
+BOT_VERSION = "v4.0 🛡️⏳"
 
 # --- LOGGING SETUP ---
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
@@ -119,21 +120,21 @@ async def help_command(ctx):
         "* **!version**\n"
         "  Shows the current build version.\n\n"
         "* **!tldr [amount]**\n"
-        "  Grouped Summaries + **Cortisol Spike** detection.\n\n"
+        "  Grouped summaries. (Max 24h). Reply to a message to start there.\n\n"
         "* **!arguments [amount]**\n"
-        "  In-depth Conflict Analysis and Mogg updates.\n\n"
+        "  Conflict analysis. (Max 24h). Reply to a message to start there.\n\n"
         "* **!moggboard**\n"
-        "  View this server's specific dominance hierarchy.\n\n"
+        "  View server dominance hierarchy.\n\n"
         "* **!keystatus**\n"
         "  Check API health and daily quotas.\n\n"
         "---\n"
         "### 🛡️ Admin Commands\n"
         "* **!clearmogs**\n"
-        "  Resets this server's Moggboard data.\n\n"
+        "  Resets server's Moggboard data.\n\n"
         "* **!botlog**\n"
-        "  Displays the last 10 lines of the terminal log.\n\n"
+        "  Displays the last 10 lines of terminal log.\n\n"
         "* **!update**\n"
-        "  Pulls latest code from GitHub and restarts the container."
+        "  Pulls latest code and restarts container."
     )
     await ctx.send(help_text)
 
@@ -157,9 +158,7 @@ async def moggboard(ctx):
     all_data = load_json_data("mogg_stats.json")
     guild_id = str(ctx.guild.id)
     server_data = all_data.get(guild_id, {})
-    
     if not server_data: return await ctx.send("The Moggboard for this server is empty.")
-    
     sorted_users = sorted(server_data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
     msg = f"## 👑 {ctx.guild.name.upper()} MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
@@ -206,19 +205,39 @@ async def fetch_history(ctx, args):
     numbers = re.findall(r'\d+', raw_input)
     value = int(numbers[0]) if numbers else 50
     transcript_list = []
-    is_time_mode = any(k in raw_input for k in ["min", "hour", "hr"])
     base_url = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/"
-    if is_time_mode:
-        delta = timedelta(minutes=value) if "min" in raw_input else timedelta(hours=value)
+
+    # Contextual Replies take priority
+    if ctx.message.reference:
+        try:
+            replied_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            # Fetch with a hard cap of 200 messages for safety
+            async for msg in ctx.channel.history(after=replied_msg.created_at, oldest_first=True, limit=200):
+                if msg.author.bot: continue
+                transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
+            transcript_list.insert(0, f"USER: {replied_msg.author.display_name} | LINK: {base_url}{replied_msg.id} | MSG: {replied_msg.content}")
+            return transcript_list
+        except: pass
+
+    # Time-based fetch with Safeguard
+    if any(k in raw_input for k in ["min", "hour", "hr"]):
+        delta_minutes = value if "min" in raw_input else value * 60
+        if delta_minutes > 1440:  # 1440 mins = 24 hours
+            await ctx.reply("⚠️ Safeguards have been put in place that limit requests to 24h to prevent the tokens from being exhausted.")
+            return None
+        
+        delta = timedelta(minutes=delta_minutes)
         async for msg in ctx.channel.history(after=discord.utils.utcnow() - delta, oldest_first=True):
             if msg.author.bot or msg.id == ctx.message.id: continue
             transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
     else:
-        async for msg in ctx.channel.history(limit=value + 10):
+        # Amount-based fetch
+        async for msg in ctx.channel.history(limit=min(value, 300) + 10): # Safety cap of 300 msg
             if msg.author.bot or msg.id == ctx.message.id: continue
             transcript_list.append(f"USER: {msg.author.display_name} | LINK: {base_url}{msg.id} | MSG: {msg.content}")
             if len(transcript_list) >= value: break
         transcript_list.reverse()
+    
     return transcript_list
 
 @bot.command(name="tldr")
@@ -227,19 +246,21 @@ async def tldr(ctx, *, args: str = "50"):
     try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
+    if transcript is None: return # Handled by safeguard message
     if not transcript: return await ctx.send("No messages found.")
+    
     history_text = "\n".join(transcript)
     prompt = (
-        f"Summarize the following transcript. "
-        f"CRITICAL: The '# 📝 SUMMARIES' section must be grouped by user display name.\n"
+        f"Summarize transcript. "
+        f"CRITICAL: '# 📝 SUMMARIES' section must be grouped by user display name.\n"
         f"# 📝 SUMMARIES\n"
         f"Grouped by User Display Name:\n"
         f"- [User Name]: bullet points of their contributions.\n"
         f"# 📈 CORTISOL SPIKES\n"
-        f"Identify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n"
+        f"Identify aggression. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n"
         f"# MOGG DATA (INTERNAL)\n"
         f"Format: 'WINNER: [Name] | LOSER: [Name]'\n"
-        f"RULES: Use '---SPLIT---' between these 3 sections.\n\n"
+        f"RULES: Use '---SPLIT---' between sections.\n\n"
         f"TRANSCRIPT:\n{history_text}"
     )
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
@@ -250,12 +271,14 @@ async def arguments(ctx, *, args: str = "50"):
     try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
+    if transcript is None: return # Handled by safeguard message
     if not transcript: return await ctx.send("No messages found.")
+    
     history_text = "\n".join(transcript)
     prompt = (
-        f"Analyze the transcript for arguments. Use '---SPLIT---' between these 4 sections:\n"
-        f"1. # 📜 ARGUMENT SUMMARY - Brief overview of what happened.\n"
-        f"2. # 🔍 PER-POINT REVIEW - Detailed breakdown of claims made.\n"
+        f"Analyze for arguments. Use '---SPLIT---' between these 4 sections:\n"
+        f"1. # 📜 ARGUMENT SUMMARY - Overview of the dispute.\n"
+        f"2. # 🔍 PER-POINT REVIEW - Analysis of claims.\n"
         f"3. # ⚖️ FINAL VERDICT - Decisive resolution. Explicitly state: '[Name] wins and [Name] loses.'\n"
         f"4. MOGG DATA (INTERNAL) - Format: 'WINNER: [Name] | LOSER: [Name]'\n\n"
         f"TRANSCRIPT:\n{history_text}"
@@ -303,13 +326,9 @@ async def process_ai_request(ctx, prompt, title_prefix, update_stats=False):
             if match:
                 winner, loser = match.group(1).strip().rstrip('.,!'), match.group(2).strip().rstrip('.,!')
                 all_data = load_json_data("mogg_stats.json")
-                
-                # Initialize guild data if missing
                 if guild_id not in all_data: all_data[guild_id] = {}
-                
                 for p in [winner, loser]:
                     if p not in all_data[guild_id]: all_data[guild_id][p] = {"wins": 0, "losses": 0}
-                
                 all_data[guild_id][winner]["wins"] += 1
                 all_data[guild_id][loser]["losses"] += 1
                 save_json_data("mogg_stats.json", all_data)
