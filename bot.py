@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.7.5 - Full Command Restoration. Fixed missing Admin commands and Help menu.
+# v4.7.5 - Maintainer Logic Lock. Restored ALL technical comments and admin suite.
 # Major: 4 | Minor: 7 | Subminor: 5
-BOT_VERSION = "v4.7.5 - Full Command Restoration ⚡"
+BOT_VERSION = "v4.7.5 - Maintainer Logic Lock ⚡"
 
 # --- GLOBAL START TIME ---
 # Used for uptime tracking in the !version command.
@@ -111,17 +111,27 @@ def get_rank_class(ratio):
 
 @bot.command(name="help")
 async def help_command(ctx):
-    """Full v4.7.5 Command Overview including Admin tools."""
+    """Legacy styled help menu for v4.7.5 core features."""
     help_text = (
-        "## 🛠️ Bot Commands Overview\n"
-        "**`!version`** - View current software version and uptime.\n"
-        "**`!tldr [count/link]`** - Summarize chat with bullet points & Mogg scores.\n"
-        "**`!arguments`** - Adjudicate recent chat to update Mogg scores.\n"
-        "**`!moggboard`** - View the server-wide Win/Loss rankings.\n"
-        "**`!keystatus`** - Check API quota and rate-limit status.\n"
-        "**`!clearmogs`** - (Admin Only) Reset Mogg stats for this server.\n"
-        "**`!botlog`** - (Admin Only) Fetch the last 15 lines of the NUC log.\n"
-        "**`!update`** - (Admin Only) Pull latest code and restart container."
+        "🤖 **Bot Commands**\n"
+        "**`!version`**\n"
+        "Shows the current build version.\n\n"
+        "**`!tldr [amount]`**\n"
+        "Summaries + Cortisol Spike detection.\n\n"
+        "**`!arguments [amount]`**\n"
+        "Conflict Analysis and Mogg updates.\n\n"
+        "**`!moggboard`**\n"
+        "View the server's dominance hierarchy.\n\n"
+        "**`!keystatus`**\n"
+        "Check API health and daily quotas.\n\n"
+        "---\n"
+        "🛡️ **Admin Commands**\n"
+        "**`!clearmogs`**\n"
+        "Resets Moggboard data to zero.\n\n"
+        "**`!botlog`**\n"
+        "Displays the last 10 lines of the terminal log.\n\n"
+        "**`!update`**\n"
+        "Pulls latest code from GitHub and restarts the container."
     )
     await ctx.send(help_text)
 
@@ -140,7 +150,6 @@ async def moggboard(ctx):
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
-    
     sorted_users = sorted(server_data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
     msg = f"## 👑 {ctx.guild.name.upper()} MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
@@ -179,8 +188,8 @@ async def botlog(ctx):
     try:
         with open("bot_terminal.log", "r") as f:
             lines = f.readlines()
-            last_15 = "".join(lines[-15:])
-            await ctx.send(f"```text\n{last_15}\n```")
+            last_10 = "".join(lines[-10:])
+            await ctx.send(f"```text\n{last_10}\n```")
     except: await ctx.send("Log read failed.")
 
 @bot.command(name="update")
@@ -208,6 +217,8 @@ async def fetch_history(ctx, args):
 
     async for msg in target_history:
         if msg.author.bot or msg.id == ctx.message.id: continue
+        
+        # Reaction Extraction: Converts 😂x2 into text strings so AI can gauge vibe.
         rx_str = ""
         if msg.reactions:
             rx_list = [f"{str(r.emoji)}x{r.count}" for r in msg.reactions]
@@ -227,6 +238,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
                     client = genai.Client(api_key=key)
+                    # Offload to thread to keep the Discord heartbeat alive.
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=prompt)
                     used_model = model_name
                     today = now.strftime('%Y-%m-%d')
@@ -243,6 +255,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
             if response: break
         if not response: return await ctx.send("🔄 All keys rate-limited.")
         
+        # Token Audit: Tracks the 'weight' of the summary request.
         meta = response.usage_metadata
         token_info = f"📊 **Token Audit:** `In: {meta.prompt_token_count}` | `Out: {meta.candidates_token_count}` | `Total: {meta.total_token_count}`"
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
@@ -261,6 +274,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False):
                 m_data[s_id][w]["wins"] += 1
                 m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
+                # Mogg Ledger: Added v4.4 to show scorecard alongside summary.
                 mogg_msg = f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} (+1W) | **Loser:** {l} (+1L)\n* **Updated:** `{w}: {m_data[s_id][w]['wins']}W` | `{l}: {m_data[s_id][l]['losses']}L`"
         
         for s in sections:
