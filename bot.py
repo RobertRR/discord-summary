@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
 # v4.7.5 - Maintainer Logic Lock. Restored ALL technical comments and admin suite.
-# Major: 4 | Minor: 7 | Subminor: 5
-BOT_VERSION = "v4.7.5 - Maintainer Logic Lock ⚡"
+# Major: 4 | Minor: 7 | Subminor: 6
+BOT_VERSION = "v4.7.6 - Help Fixer ⚡"
 
 # --- GLOBAL START TIME ---
 # Used for uptime tracking in the !version command.
