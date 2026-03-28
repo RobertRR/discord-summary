@@ -7,17 +7,15 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.8.0 - Forced 'gemini-3.1-pro-preview' for !huh to leverage deeper reasoning.
-# Restored full documentation and safety-net comments.
-BOT_VERSION = "v4.8.0 - Pro Reasoning for !huh 🧠"
+# v4.8.1 - Isolated 'gemini-3.1-pro-preview' from the general fallback chain.
+# Now 'gemini-3.1-pro-preview' is exclusively utilized by the !huh command.
+BOT_VERSION = "v4.8.1 - Isolated Pro Reasoning 🧠"
 
 # --- GLOBAL START TIME ---
-# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
 # --- LOGGING CONFIGURATION ---
-# Using RotatingFileHandler to protect the NUC's SSD from log bloat.
-# Retains 5 backups of 5MB each.
+# RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 log_file = 'bot_terminal.log'
 my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, backupCount=5)
@@ -78,15 +76,15 @@ ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 # exhausted_tracker: { "model_name": { key_index: resume_datetime } }
 exhausted_tracker = {} 
 
-# Default priority sequence for general commands like !tldr.
+# General fallback sequence for standard commands. 
+# NOTE: 'gemini-3.1-pro-preview' is removed to isolate it for !huh only.
 MODEL_CHAIN = [
-    'gemini-3.1-pro-preview', 
     'gemini-3-flash-preview', 
     'gemini-2.5-flash', 
     'gemini-3.1-flash-lite-preview'
 ]
 
-# Safety caps to prevent account-wide quota exhaustion.
+# Hard-coded daily limits per key.
 DAILY_LIMITS = {
     'gemini-3.1-pro-preview': 5, 
     'gemini-3-flash-preview': 50, 
@@ -162,7 +160,6 @@ async def huh(ctx):
     """
     Concise Fact-Checker: 
     - Uses 'gemini-3.1-pro-preview' exclusively for high-fidelity reasoning.
-    - Provides immediate visual feedback via '🔍' reaction.
     """
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
@@ -173,14 +170,12 @@ async def huh(ctx):
     target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
     media_parts = []
     
-    # Extract images for multimodal analysis.
     if target.attachments:
         for attachment in target.attachments:
             if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
                 image_data = await attachment.read()
                 media_parts.append(types.Part.from_bytes(data=image_data, mime_type='image/jpeg'))
 
-    # v4.8.0 Re-engineered Prompt: Brief, concise, and focused.
     prompt = (
         f"CONTEXT: Explain the following content concisely.\n"
         f"CONTENT: {target.content}\n"
@@ -190,7 +185,7 @@ async def huh(ctx):
         f"3. Strict brevity: Avoid walls of text. If there is no misinformation, simply provide the summary."
     )
     
-    # We force 'gemini-3.1-pro-preview' to ensure maximum reasoning accuracy for fact-checks.
+    # FORCED PRO MODEL: Exclusively uses the reasoning model for fact-checks.
     await process_ai_request(
         ctx, 
         prompt, 
@@ -220,7 +215,9 @@ async def keystatus(ctx):
     now = datetime.now()
     usage = load_json_data("usage_stats.json").get(now.strftime('%Y-%m-%d'), {})
     msg = "### 🔑 API Key & Quota Status\n"
-    for model in MODEL_CHAIN:
+    # Monitors both the general chain and the isolated Pro model.
+    monitored_models = ['gemini-3.1-pro-preview'] + MODEL_CHAIN
+    for model in monitored_models:
         dead = len(exhausted_tracker.get(model, {}))
         used = usage.get(model, 0)
         total = DAILY_LIMITS.get(model, 0) * len(ALL_KEYS)
@@ -283,7 +280,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
     """
     Orchestrates the API call. 
     - forced_model: If provided, bypasses MODEL_CHAIN to use a specific model exclusively.
-    - Includes key-rotation, rate-limit tracking, and disk-safe state saving.
     """
     async with ctx.typing():
         response = None
@@ -291,7 +287,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
         now = datetime.now()
         content_payload = [prompt] + (media_parts if media_parts else [])
         
-        # Use only the forced model if requested, otherwise fallback through the chain.
         target_models = [forced_model] if forced_model else MODEL_CHAIN
         
         for model_name in target_models:
@@ -300,20 +295,17 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
                     client = genai.Client(api_key=key)
-                    # Offload to thread to keep Discord heartbeat responsive.
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
                     used_model = model_name
                     
-                    # Update usage stats for keystatus monitoring.
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
-                    if today not in data: data[today] = {m: 0 for m in MODEL_CHAIN}
+                    if today not in data: data[today] = {m: 0 for m in monitored_models} if 'monitored_models' in locals() else {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
                     data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
                 except errors.ClientError as e:
                     if "429" in str(e): 
-                        # Temporarily disable this key for this specific model.
                         exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
                         continue
                     else:
@@ -327,7 +319,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
         if not response: 
             return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` are exhausted.")
         
-        # Token metadata auditing.
         meta = response.usage_metadata
         token_info = f"📊 **Token Audit:** `In: {meta.prompt_token_count}` | `Out: {meta.candidates_token_count}` | `Total: {meta.total_token_count}`"
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
@@ -336,7 +327,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
         mogg_msg = ""
         
         if update_stats:
-            # Parse WINNER/LOSER tags for Moggboard updates.
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
                 w, l = match.group(1).strip().rstrip('.,!'), match.group(2).strip().rstrip('.,!')
@@ -350,7 +340,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                 save_json_data("mogg_stats.json", m_data)
                 mogg_msg = f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} (+1W) | **Loser:** {l} (+1L)\n* **Updated:** `{w}: {m_data[s_id][w]['wins']}W` | `{l}: {m_data[s_id][l]['losses']}L`"
         
-        # Handle Discord message character limits (2000 chars).
         for s in sections:
             content = s.strip()
             if content and "WINNER:" not in content:
