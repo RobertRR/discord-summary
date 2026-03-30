@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.8.2 - Added old prompts back.
+# v4.8.3 - Added old prompts back.
 # Pls stop hallucinating and changing code I didn't request.
-BOT_VERSION = "v4.8.2 - Hallucination Removal 🧠"
+BOT_VERSION = "v4.8.3 - Hallucination Removal 2 🧠"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -354,7 +354,8 @@ async def tldr(ctx, *, args: str = "50"):
     try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
-    if not transcript: return
+    if not transcript: return await ctx.send("No messages found.")
+    history_text = "\n".join(transcript)
     prompt = (
         f"Summarize the following transcript. "
         f"CRITICAL: The '# 📝 SUMMARIES' section must be grouped by user display name.\n"
@@ -373,10 +374,11 @@ async def tldr(ctx, *, args: str = "50"):
 @bot.command(name="arguments")
 @commands.cooldown(1, 30, commands.BucketType.channel)
 async def arguments(ctx, *, args: str = "50"):
-    try: await ctx.message.add_reaction("⚖️")
+    try: await ctx.message.add_reaction("✅")
     except: pass
     transcript = await fetch_history(ctx, args)
-    if not transcript: return
+    if not transcript: return await ctx.send("No messages found.")
+    history_text = "\n".join(transcript)
     prompt = (
         f"Analyze the transcript for arguments. Use '---SPLIT---' between these 4 sections:\n"
         f"1. # 📜 ARGUMENT SUMMARY - Brief overview of what happened.\n"
@@ -385,6 +387,6 @@ async def arguments(ctx, *, args: str = "50"):
         f"4. MOGG DATA (INTERNAL) - Format: 'WINNER: [Name] | LOSER: [Name]'\n\n"
         f"TRANSCRIPT:\n{history_text}"
     )
-    await process_ai_request(ctx, prompt, "Adjudication", update_stats=True)
+    await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 if DISCORD_TOKEN: bot.run(DISCORD_TOKEN)
