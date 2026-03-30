@@ -7,19 +7,20 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.8.6 - "Today" Context Update.
-# 1. !tldr today and !arguments today now fetch all messages since 12am local time.
-# 2. Maintained GitHub Auto-Sync, Rank terminology, and dynamic changelog.
-# 3. Preserved NUC hardware safety nets (os.fsync).
-BOT_VERSION = "v4.8.6 - Today Context Update 📅"
+# v4.8.7 - Strict Reply Isolation.
+# 1. Isolated !huh logic to ensure it ONLY processes the replied-to message.
+# 2. Prevented 'today' or 'count' arguments from affecting !huh context.
+BOT_VERSION = "v4.8.7 - Strict Reply Isolation 🔒"
 
 # --- GLOBAL START TIME ---
+# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
 # NOTE: Replace with your actual Raw GitHub URL for the auto-sync to function.
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/USER/REPO/main/bot.py"
 
 # --- LOGGING CONFIGURATION ---
+# RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 log_file = 'bot_terminal.log'
 my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, backupCount=5)
@@ -147,7 +148,6 @@ async def check_for_updates():
         log_info("Update detected on GitHub. Triggering restart...")
         # Mark that an update is intended to enable startup validation
         with open("pending_update.txt", "w") as f: f.write(remote_hash)
-        # Assuming the external Docker/Systemd loop handles the 'git pull' on exit
         sys.exit(0)
 
 @bot.event
@@ -155,7 +155,6 @@ async def on_ready():
     """Startup routine: Validates GitHub sync and reports update status."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     
-    # Check if we just restarted for an update and validate against cache
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     pending_file = os.path.join(os.getcwd(), "pending_update.txt")
     
@@ -264,13 +263,17 @@ async def moggboard(ctx):
 
 @bot.command(name="huh")
 async def huh(ctx):
-    """Pro-model fact-checking: Requires a message reply."""
+    """
+    Isolated Fact-Checker: Strictly limited to the replied-to message.
+    AUDIT: Bypasses fetch_history to prevent accidental token bloat from 'today' context.
+    """
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
     
     try: await ctx.message.add_reaction("🔍")
     except: pass
 
+    # Strict single-message retrieval for the AI context.
     target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
     media_parts = []
     
@@ -281,12 +284,12 @@ async def huh(ctx):
                 media_parts.append(types.Part.from_bytes(data=image_data, mime_type='image/jpeg'))
 
     prompt = (
-        f"CONTEXT: Explain concisely.\n"
+        f"CONTEXT: Explain the following content concisely.\n"
         f"CONTENT: {target.content}\n"
         f"INSTRUCTIONS:\n"
-        f"1. Summarize in 1-2 sentences. No paragraphs.\n"
-        f"2. Fact check; if incorrect, concisely state why and link a primary source.\n"
-        f"3. Strict brevity."
+        f"1. Summarize exactly what this is saying in 1-2 short, clear sentences. DO NOT use paragraphs.\n"
+        f"2. Check for misinformation. If incorrect, concisely state why and link a single credible/primary source.\n"
+        f"3. Strict brevity: Avoid walls of text. If there is no misinformation, simply provide the summary."
     )
     
     await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts, forced_model='gemini-3.1-pro-preview')
@@ -338,11 +341,10 @@ async def update(ctx):
 # --- AI PROCESSING ENGINE ---
 
 async def fetch_history(ctx, args):
-    """Context harvester for !tldr and !arguments. Handles 'today' keyword."""
+    """Context harvester for !tldr and !arguments. Handles 'today' and counts."""
     raw_input = args.strip().lower()
     transcript_list = []
     
-    # NEW: Handle "today" logic
     if raw_input == "today":
         today_start = datetime.combine(datetime.now().date(), time.min)
         target_history = ctx.channel.history(after=today_start, oldest_first=True, limit=1000)
@@ -401,7 +403,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
             if response: break
         
         if not response: 
-            return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` are exhausted.")
+            return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` exhausted.")
         
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
