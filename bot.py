@@ -4,25 +4,22 @@ from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
 import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.8.5 - GitHub Auto-Sync Edition.
-# 1. Added background task to check GitHub for changes every 5 mins.
-# 2. Implemented recursive restart logic to bypass GitHub CDN caching.
-# 3. Maintained 'Rank' terminology and dynamic changelog.
-# 4. Integrated !version/!update changelog extraction.
-BOT_VERSION = "v4.8.5 - GitHub Auto-Sync 🔄"
+# v4.8.6 - "Today" Context Update.
+# 1. !tldr today and !arguments today now fetch all messages since 12am local time.
+# 2. Maintained GitHub Auto-Sync, Rank terminology, and dynamic changelog.
+# 3. Preserved NUC hardware safety nets (os.fsync).
+BOT_VERSION = "v4.8.6 - Today Context Update 📅"
 
 # --- GLOBAL START TIME ---
-# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
 # NOTE: Replace with your actual Raw GitHub URL for the auto-sync to function.
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/USER/REPO/main/bot.py"
 
 # --- LOGGING CONFIGURATION ---
-# RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 log_file = 'bot_terminal.log'
 my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, backupCount=5)
@@ -213,12 +210,12 @@ async def help_command(ctx):
         "🤖 **Bot Commands**\n"
         "**`!version`**\n"
         "Shows build version, uptime, and changelog.\n\n"
-        "**`!tldr [amount]`**\n"
-        "Summaries + Cortisol Spike detection.\n\n"
+        "**`!tldr [amount/today]`**\n"
+        "Summaries + Cortisol Spike detection. Use 'today' for all msgs since 12am.\n\n"
         "**`!huh`**\n"
         "Reply to a message to explain content and fact-check claims.\n\n"
-        "**`!arguments [amount]`**\n"
-        "Conflict Analysis and Mogg updates.\n\n"
+        "**`!arguments [amount/today]`**\n"
+        "Conflict Analysis and Mogg updates. Use 'today' for all msgs since 12am.\n\n"
         "**`!moggboard`**\n"
         "View the server's dominance hierarchy.\n\n"
         "**`!keystatus`**\n"
@@ -341,20 +338,25 @@ async def update(ctx):
 # --- AI PROCESSING ENGINE ---
 
 async def fetch_history(ctx, args):
-    """Context harvester for !tldr and !arguments."""
-    raw_input = args.strip()
+    """Context harvester for !tldr and !arguments. Handles 'today' keyword."""
+    raw_input = args.strip().lower()
     transcript_list = []
-    links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
     
-    if len(links) >= 2:
-        s_id, e_id = sorted([int(links[0]), int(links[1])])
-        target_history = ctx.channel.history(after=await ctx.channel.fetch_message(s_id), before=await ctx.channel.fetch_message(e_id), oldest_first=True, limit=300)
-    elif ctx.message.reference:
-        target_history = ctx.channel.history(after=await ctx.channel.fetch_message(ctx.message.reference.message_id), oldest_first=True, limit=200)
+    # NEW: Handle "today" logic
+    if raw_input == "today":
+        today_start = datetime.combine(datetime.now().date(), time.min)
+        target_history = ctx.channel.history(after=today_start, oldest_first=True, limit=1000)
     else:
-        numbers = re.findall(r'\d+', raw_input)
-        val = int(numbers[0]) if numbers else 50
-        target_history = ctx.channel.history(limit=min(val, 300))
+        links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
+        if len(links) >= 2:
+            s_id, e_id = sorted([int(links[0]), int(links[1])])
+            target_history = ctx.channel.history(after=await ctx.channel.fetch_message(s_id), before=await ctx.channel.fetch_message(e_id), oldest_first=True, limit=300)
+        elif ctx.message.reference:
+            target_history = ctx.channel.history(after=await ctx.channel.fetch_message(ctx.message.reference.message_id), oldest_first=True, limit=200)
+        else:
+            numbers = re.findall(r'\d+', raw_input)
+            val = int(numbers[0]) if numbers else 50
+            target_history = ctx.channel.history(limit=min(val, 300))
 
     async for msg in target_history:
         if msg.author.bot or msg.id == ctx.message.id: continue
