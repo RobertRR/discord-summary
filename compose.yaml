@@ -9,23 +9,34 @@ services:
     environment:
       - TZ=Australia/Sydney
     healthcheck:
+      # We check for the specific process name to be more precise.
       test:
         - CMD-SHELL
-        - pgrep -f python || exit 1
-      interval: 30s
+        - pgrep -f bot.py || exit 1
+      interval: 1m # Increased interval to give the reload loop room to breathe.
       timeout: 10s
       retries: 3
+      # The start_period is crucial: it allows time for apt/pip installs 
+      # on the first run without the healthcheck killing the container.
+      start_period: 4m
     command: >
       sh -c "apt-get update && apt-get install -y curl procps && 
              python -m pip install --upgrade pip && 
              pip install --no-cache-dir discord.py google-genai youtube-transcript-api && 
              while true; do 
-               echo 'Fetching code...';
-               curl -sSL 'https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py' -o bot.py.tmp && 
-               mv -f bot.py.tmp bot.py && 
-               sync && 
+               echo 'Checking for updates on GitHub...';
+               # Use -f to fail on server errors and avoid overwriting with error pages.
+               if curl -sSLf -H 'Cache-Control: no-cache' 'https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py' -o bot.py.tmp; then
+                 echo 'Sync successful. Deploying code...';
+                 mv -f bot.py.tmp bot.py;
+               else
+                 echo 'Sync failed or no change detected. Proceeding with local version.';
+                 rm -f bot.py.tmp;
+               fi;
+               sync; 
+               echo 'Launching Bot...';
                python -u bot.py; 
-               echo 'Restarting loop in 5s...';
+               echo 'Bot process exited. Restarting loop in 5s...';
                sleep 5; 
              done"
 networks: {}
