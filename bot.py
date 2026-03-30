@@ -7,9 +7,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.8.1 - Isolated 'gemini-3.1-pro-preview' from the general fallback chain.
-# Now 'gemini-3.1-pro-preview' is exclusively utilized by the !huh command.
-BOT_VERSION = "v4.8.1 - Isolated Pro Reasoning 🧠"
+# v4.8.2 - Added old prompts back.
+# Pls stop hallucinating and changing code I didn't request.
+BOT_VERSION = "v4.8.2 - Hallucination Removal 🧠"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -356,11 +356,17 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return
     prompt = (
-        f"Summarize the conversation. Use '---SPLIT---'.\n"
-        f"Group by user: **[Name]**: [bullets].\n"
-        f"# 📈 CORTISOL SPIKES: toxic behavior notes.\n"
-        f"# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\n"
-        f"TRANSCRIPT:\n" + "\n".join(transcript)
+        f"Summarize the following transcript. "
+        f"CRITICAL: The '# 📝 SUMMARIES' section must be grouped by user display name.\n"
+        f"# 📝 SUMMARIES\n"
+        f"Grouped by User Display Name:\n"
+        f"- [User Name]: bullet points of their contributions.\n"
+        f"# 📈 CORTISOL SPIKES\n"
+        f"Identify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n"
+        f"# MOGG DATA (INTERNAL)\n"
+        f"Format: 'WINNER: [Name] | LOSER: [Name]'\n"
+        f"RULES: Use '---SPLIT---' between these 3 sections.\n\n"
+        f"TRANSCRIPT:\n{history_text}"
     )
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
@@ -372,9 +378,12 @@ async def arguments(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return
     prompt = (
-        f"Determine a winner and a loser based on argument strength and wit.\n"
-        f"Format: WINNER: [Name] | LOSER: [Name]\n\n"
-        f"TRANSCRIPT:\n" + "\n".join(transcript)
+        f"Analyze the transcript for arguments. Use '---SPLIT---' between these 4 sections:\n"
+        f"1. # 📜 ARGUMENT SUMMARY - Brief overview of what happened.\n"
+        f"2. # 🔍 PER-POINT REVIEW - Detailed breakdown of claims made.\n"
+        f"3. # ⚖️ FINAL VERDICT - Decisive resolution. Explicitly state: '[Name] wins and [Name] loses.'\n"
+        f"4. MOGG DATA (INTERNAL) - Format: 'WINNER: [Name] | LOSER: [Name]'\n\n"
+        f"TRANSCRIPT:\n{history_text}"
     )
     await process_ai_request(ctx, prompt, "Adjudication", update_stats=True)
 
