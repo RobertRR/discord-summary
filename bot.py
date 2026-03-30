@@ -7,21 +7,19 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.2 - Persistent Update Reporting 📢
-# 1. Auto-updates now report success to the last channel used by the !update command.
-# 2. Unified restart validation logic to ensure notifications only fire on successful sync.
-# 3. BOGUS LINE TO TEST AUTO UPDATE
-BOT_VERSION = "v4.9.2 - Persistent Update Reporting 📢"
+# v4.9.3 - Enhanced Logging & Auto-Update Distinction 🛠️
+# 1. Added timestamps to all terminal log outputs for improved troubleshooting.
+# 2. Differentiated between manual and automatic updates in startup reports.
+# 3. Improved logging heartbeat detail.
+BOT_VERSION = "v4.9.3 - Enhanced Logging 🛠️"
 
 # --- GLOBAL START TIME ---
-# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
 # NOTE: The raw URL for the GitHub Auto-Sync feature.
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py"
 
 # --- LOGGING CONFIGURATION ---
-# RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 log_file = 'bot_terminal.log'
 my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, backupCount=5)
@@ -33,8 +31,10 @@ app_log.setLevel(logging.INFO)
 app_log.addHandler(my_handler)
 
 def log_info(msg):
-    """Prints to console and writes to the rotating log file."""
-    print(msg)
+    """Prints to console with timestamp and writes to the rotating log file."""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]
+    formatted_msg = f"{timestamp} INFO {msg}"
+    print(formatted_msg)
     app_log.info(msg)
 
 # --- DATA PERSISTENCE HELPERS ---
@@ -78,7 +78,6 @@ def save_json_data(filename, data):
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
             f.flush()
-            # Hardware safety: Forces the OS to write buffer to disk immediately.
             os.fsync(f.fileno()) 
     except Exception as e:
         log_info(f"Save Failed: {e}")
@@ -90,17 +89,9 @@ DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
-# exhausted_tracker: { "model_name": { key_index: resume_datetime } }
 exhausted_tracker = {} 
+MODEL_CHAIN = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 
-# General fallback sequence for standard commands. 
-MODEL_CHAIN = [
-    'gemini-3-flash-preview', 
-    'gemini-2.5-flash', 
-    'gemini-3.1-flash-lite-preview'
-]
-
-# Hard-coded daily limits per key.
 DAILY_LIMITS = {
     'gemini-3.1-pro-preview': 5, 
     'gemini-3-flash-preview': 50, 
@@ -127,7 +118,7 @@ def get_file_hash(filepath):
     return sha256_hash.hexdigest()
 
 async def fetch_remote_hash():
-    """Fetches remote hash with strict no-cache headers to bypass CDN."""
+    """Fetches remote hash with strict no-cache headers to bypass GitHub CDN."""
     headers = {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -135,51 +126,54 @@ async def fetch_remote_hash():
     }
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            # Timestamp parameter serves as an additional cache-buster.
             async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     return hashlib.sha256(content).hexdigest()
                 log_info(f"Update check HTTP Error: {resp.status}")
-    except Exception as e:
-        log_info(f"Update check Connection Error: {e}")
+    except Exception: pass
     return None
 
 @tasks.loop(minutes=5)
 async def check_for_updates():
-    """Background task to monitor GitHub with heartbeat logging."""
+    """Background task to monitor GitHub."""
     local_hash = get_file_hash(__file__)
     remote_hash = await fetch_remote_hash()
     
     if remote_hash:
         if local_hash != remote_hash:
-            log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            # Mark that an update is intended to enable startup validation.
-            with open("pending_update.txt", "w") as f: f.write(remote_hash)
-            # sys.exit triggers the Docker restart loop which curls the latest code.
+            log_info(f"AUTO-UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
+            # Store hash and type flag separated by |
+            with open("pending_update.txt", "w") as f: f.write(f"{remote_hash}|auto")
             sys.exit(0)
         else:
-            log_info("Sync Heartbeat: Local and Remote hashes match.")
+            log_info(f"Heartbeat: GitHub Sync Check - No changes found (Remote: {remote_hash[:8]})")
 
 @bot.event
 async def on_ready():
-    """Startup routine: Validates GitHub sync and reports status in channel."""
+    """Startup routine: Validates sync, customized reporting based on update type."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     pending_file = os.path.join(os.getcwd(), "pending_update.txt")
     
-    # Check if we just restarted for an update (Manual or Auto-detected)
     if os.path.exists(pending_file):
-        with open(pending_file, "r") as f: expected_hash = f.read().strip()
+        with open(pending_file, "r") as f: 
+            raw_pending = f.read().strip()
         
+        # Handle backward compatibility or new format (hash|type)
+        if "|" in raw_pending:
+            expected_hash, update_type = raw_pending.split("|", 1)
+        else:
+            expected_hash, update_type = raw_pending, "manual"
+
         # 1. Cache-hit Recursive Restart Check
         if get_file_hash(__file__) != expected_hash:
-            log_info("Cache hit detected. Restarting to force refresh...")
+            log_info(f"Cache hit detected during {update_type} update. Restarting to force refresh...")
             sys.exit(0)
         else:
             # Hash matches! Update was successful.
-            log_info("Update verified. Preparing report...")
+            log_info(f"Verified successful {update_type} sync. Posting report...")
             
             if os.path.exists(update_file):
                 try:
@@ -188,22 +182,27 @@ async def on_ready():
                     
                     channel = await bot.fetch_channel(chan_id)
                     if channel:
-                        # Permission Audit: Ensure we can send messages
                         perms = channel.permissions_for(channel.guild.me)
                         if perms.send_messages:
                             changelog = get_changelog()
+                            title = "🤖 Auto-Update Successful" if update_type == "auto" else "✅ Manual Update Successful"
+                            color = 0x9b59b6 if update_type == "auto" else 0x3498db
+                            
                             if perms.embed_links:
-                                embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
+                                embed = discord.Embed(title=title, color=color)
                                 embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
+                                if update_type == "auto":
+                                    embed.description = "*This update was automatically detected and deployed via GitHub sync.*"
                                 embed.add_field(name="Recent Changes", value=changelog, inline=False)
                                 await channel.send(embed=embed)
                             else:
-                                msg = f"✅ **Update Successful**\n**Version:** `{BOT_VERSION}`\n**Recent Changes:**\n{changelog}"
+                                msg = f"**{title}**\n**Version:** `{BOT_VERSION}`\n"
+                                if update_type == "auto": msg += "*(Automatic Sync)*\n"
+                                msg += f"**Recent Changes:**\n{changelog}"
                                 await channel.send(msg)
                 except Exception as e:
-                    log_info(f"Report failed: {e}")
+                    log_info(f"Reporting error: {e}")
             
-            # Remove the pending flag. We DO NOT remove update_channel.txt so it persists.
             os.remove(pending_file)
 
     if not check_for_updates.is_running():
@@ -319,7 +318,7 @@ async def botlog(ctx):
 
 @bot.command(name="update")
 async def update(ctx):
-    """Saves channel ID as persistent update channel and triggers restart."""
+    """Saves channel ID and triggers restart for manual update."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     
     remote_hash = await fetch_remote_hash()
@@ -328,10 +327,9 @@ async def update(ctx):
 
     await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
     
-    # Save this channel as the persistent reporting channel.
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
-    # Mark the sync flag for on_ready logic.
-    with open("pending_update.txt", "w") as f: f.write(remote_hash)
+    # Mark as manual update
+    with open("pending_update.txt", "w") as f: f.write(f"{remote_hash}|manual")
     
     sys.exit(0)
 
