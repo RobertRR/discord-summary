@@ -16,7 +16,7 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations and 
 
 ## 🛠 Commands
 
-The `!tldr`, `!huh` and `!arguments` commands are flexible! You can type e.g. `!tldr today` for a summary of all conversations since 12am, or `!tldr 50 messages` or `!tldr 30 mins` for message count or time based. You can also reply to a message and just say `!tldr` or the other commands to use that message as the starting point for the bot's processing.
+The `!tldr` and `!arguments` commands are flexible! You can type e.g. `!tldr today` for a summary of all conversations since 12am, or `!tldr 50 messages` or `!tldr 30 mins` for message count or time based. You can also reply to a message and just say `!tldr` or `!arguments` to use that message as the starting point for the bot's processing. The `!huh` command must be a reply to an existing message.
 
 | Command | Description | Access |
 | :--- | :--- | :--- |
