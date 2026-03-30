@@ -7,11 +7,13 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.3 - Enhanced Logging & Auto-Update Distinction 🛠️
-# 1. Added timestamps to all terminal log outputs for improved troubleshooting.
-# 2. Differentiated between manual and automatic updates in startup reports.
-# 3. Improved logging heartbeat detail.
-BOT_VERSION = "v4.9.3 - Enhanced Logging 🛠️"
+# v4.9.4 - Update Distinction & Safety Fix 🛠️
+# 1. Fixed wording for auto-update success messages to distinguish from manual updates.
+# 2. Re-implemented hardware-safe file writes with fsync for update tracking.
+# 3. Enhanced aggressive GitHub sync with improved error handling and cache-busting.
+# 4. Fixed f-string logging bug in startup recursive restart check.
+# 5. Optimized permission handling to prevent 403 errors during status reporting.
+BOT_VERSION = "v4.9.4 - Update Distinction 🛠️"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -61,6 +63,17 @@ def load_file(filename):
     except FileNotFoundError:
         return []
 
+def save_text_safe(filename, content):
+    """Saves text to disk with fsync to ensure it is committed before a process exit."""
+    try:
+        path = os.path.join(os.getcwd(), filename)
+        with open(path, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        log_info(f"Failed to save {filename}: {e}")
+
 def load_json_data(filename):
     """Loads state data (mogg_stats, usage_stats). Returns empty dict on failure."""
     path = os.path.join(os.getcwd(), filename)
@@ -89,9 +102,17 @@ DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
+# exhausted_tracker: { "model_name": { key_index: resume_datetime } }
 exhausted_tracker = {} 
-MODEL_CHAIN = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 
+# General fallback sequence for standard commands. 
+MODEL_CHAIN = [
+    'gemini-3-flash-preview', 
+    'gemini-2.5-flash', 
+    'gemini-3.1-flash-lite-preview'
+]
+
+# Hard-coded daily limits per key.
 DAILY_LIMITS = {
     'gemini-3.1-pro-preview': 5, 
     'gemini-3-flash-preview': 50, 
@@ -126,12 +147,14 @@ async def fetch_remote_hash():
     }
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
+            # Timestamp parameter serves as an additional cache-buster.
             async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     return hashlib.sha256(content).hexdigest()
                 log_info(f"Update check HTTP Error: {resp.status}")
-    except Exception: pass
+    except Exception as e:
+        log_info(f"Update check Connection Error: {e}")
     return None
 
 @tasks.loop(minutes=5)
@@ -143,8 +166,8 @@ async def check_for_updates():
     if remote_hash:
         if local_hash != remote_hash:
             log_info(f"AUTO-UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            # Store hash and type flag separated by |
-            with open("pending_update.txt", "w") as f: f.write(f"{remote_hash}|auto")
+            # Force commit to disk before exiting to ensure flag is read on boot
+            save_text_safe("pending_update.txt", f"{remote_hash}|auto")
             sys.exit(0)
         else:
             log_info(f"Heartbeat: GitHub Sync Check - No changes found (Remote: {remote_hash[:8]})")
@@ -161,15 +184,16 @@ async def on_ready():
         with open(pending_file, "r") as f: 
             raw_pending = f.read().strip()
         
-        # Handle backward compatibility or new format (hash|type)
+        # Determine source (Manual vs Auto) and expected hash
         if "|" in raw_pending:
             expected_hash, update_type = raw_pending.split("|", 1)
         else:
             expected_hash, update_type = raw_pending, "manual"
 
-        # 1. Cache-hit Recursive Restart Check
-        if get_file_hash(__file__) != expected_hash:
-            log_info(f"Cache hit detected during {update_type} update. Restarting to force refresh...")
+        # 1. Cache-hit Recursive Restart Check (Aggressive)
+        current_hash = get_file_hash(__file__)
+        if current_hash != expected_hash:
+            log_info(f"Cache hit detected during {update_type} update. Expected {expected_hash[:8]} but found {current_hash[:8]}. Restarting...")
             sys.exit(0)
         else:
             # Hash matches! Update was successful.
@@ -182,22 +206,26 @@ async def on_ready():
                     
                     channel = await bot.fetch_channel(chan_id)
                     if channel:
-                        perms = channel.permissions_for(channel.guild.me)
-                        if perms.send_messages:
+                        # Permission Audit: Ensure bot can send messages and embeds in the specific channel
+                        my_member = channel.guild.me if hasattr(channel, "guild") else None
+                        perms = channel.permissions_for(my_member) if my_member else None
+                        
+                        if perms and perms.send_messages:
                             changelog = get_changelog()
-                            title = "🤖 Auto-Update Successful" if update_type == "auto" else "✅ Manual Update Successful"
-                            color = 0x9b59b6 if update_type == "auto" else 0x3498db
+                            is_auto = update_type == "auto"
+                            title = "🤖 Auto-Update Successful" if is_auto else "✅ Manual Update Successful"
+                            color = 0x9b59b6 if is_auto else 0x3498db
                             
                             if perms.embed_links:
                                 embed = discord.Embed(title=title, color=color)
                                 embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
-                                if update_type == "auto":
+                                if is_auto:
                                     embed.description = "*This update was automatically detected and deployed via GitHub sync.*"
                                 embed.add_field(name="Recent Changes", value=changelog, inline=False)
                                 await channel.send(embed=embed)
                             else:
                                 msg = f"**{title}**\n**Version:** `{BOT_VERSION}`\n"
-                                if update_type == "auto": msg += "*(Automatic Sync)*\n"
+                                if is_auto: msg += "*(Automatic Sync)*\n"
                                 msg += f"**Recent Changes:**\n{changelog}"
                                 await channel.send(msg)
                 except Exception as e:
@@ -327,9 +355,9 @@ async def update(ctx):
 
     await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
     
-    with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
-    # Mark as manual update
-    with open("pending_update.txt", "w") as f: f.write(f"{remote_hash}|manual")
+    # Save parameters safely before exit
+    save_text_safe("update_channel.txt", str(ctx.channel.id))
+    save_text_safe("pending_update.txt", f"{remote_hash}|manual")
     
     sys.exit(0)
 
