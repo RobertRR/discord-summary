@@ -7,14 +7,13 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.1 - Permissions & Aggressive Sync Fix 🛠️
-# 1. Added permission validation to update reporting to prevent 403 Forbidden errors.
-# 2. Re-implemented aggressive GitHub sync with strict no-cache headers and URL timestamping.
-# 3. Restored heartbeat logging to verify sync tasks in !botlog.
-# 4. Cleaned version tracking to remove redundant maintenance entries.
-BOT_VERSION = "v4.9.1 - Permissions & Aggressive Sync Fix 🛠️"
+# v4.9.2 - Persistent Update Reporting 📢
+# 1. Auto-updates now report success to the last channel used by the !update command.
+# 2. Unified restart validation logic to ensure notifications only fire on successful sync.
+BOT_VERSION = "v4.9.2 - Persistent Update Reporting 📢"
 
 # --- GLOBAL START TIME ---
+# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
 # NOTE: The raw URL for the GitHub Auto-Sync feature.
@@ -127,7 +126,7 @@ def get_file_hash(filepath):
     return sha256_hash.hexdigest()
 
 async def fetch_remote_hash():
-    """Fetches remote hash with strict no-cache headers to bypass GitHub CDN."""
+    """Fetches remote hash with strict no-cache headers to bypass CDN."""
     headers = {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -154,7 +153,9 @@ async def check_for_updates():
     if remote_hash:
         if local_hash != remote_hash:
             log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
+            # Mark that an update is intended to enable startup validation.
             with open("pending_update.txt", "w") as f: f.write(remote_hash)
+            # sys.exit triggers the Docker restart loop which curls the latest code.
             sys.exit(0)
         else:
             log_info("Sync Heartbeat: Local and Remote hashes match.")
@@ -167,44 +168,43 @@ async def on_ready():
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     pending_file = os.path.join(os.getcwd(), "pending_update.txt")
     
-    # 1. Cache-hit Recursive Restart Check
+    # Check if we just restarted for an update (Manual or Auto-detected)
     if os.path.exists(pending_file):
         with open(pending_file, "r") as f: expected_hash = f.read().strip()
+        
+        # 1. Cache-hit Recursive Restart Check
         if get_file_hash(__file__) != expected_hash:
             log_info("Cache hit detected. Restarting to force refresh...")
             sys.exit(0)
         else:
+            # Hash matches! Update was successful.
+            log_info("Update verified. Preparing report...")
+            
+            if os.path.exists(update_file):
+                try:
+                    with open(update_file, "r") as f: 
+                        chan_id = int(f.read().strip())
+                    
+                    channel = await bot.fetch_channel(chan_id)
+                    if channel:
+                        # Permission Audit: Ensure we can send messages
+                        perms = channel.permissions_for(channel.guild.me)
+                        if perms.send_messages:
+                            changelog = get_changelog()
+                            if perms.embed_links:
+                                embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
+                                embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
+                                embed.add_field(name="Recent Changes", value=changelog, inline=False)
+                                await channel.send(embed=embed)
+                            else:
+                                msg = f"✅ **Update Successful**\n**Version:** `{BOT_VERSION}`\n**Recent Changes:**\n{changelog}"
+                                await channel.send(msg)
+                except Exception as e:
+                    log_info(f"Report failed: {e}")
+            
+            # Remove the pending flag. We DO NOT remove update_channel.txt so it persists.
             os.remove(pending_file)
 
-    # 2. Update Status Report with Permission Check
-    if os.path.exists(update_file):
-        try:
-            with open(update_file, "r") as f: 
-                chan_id = int(f.read().strip())
-            
-            channel = await bot.fetch_channel(chan_id)
-            if channel:
-                # Permission Audit: Ensure we can send messages and embeds
-                perms = channel.permissions_for(channel.guild.me)
-                if not perms.send_messages:
-                    log_info(f"Aborting update report: Missing send_messages perms in {chan_id}")
-                else:
-                    changelog = get_changelog()
-                    if perms.embed_links:
-                        embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
-                        embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
-                        embed.add_field(name="Recent Changes", value=changelog, inline=False)
-                        await channel.send(embed=embed)
-                    else:
-                        # Fallback to plain text if Embed Links permission is missing
-                        msg = f"✅ **Update Successful**\n**Version:** `{BOT_VERSION}`\n**Recent Changes:**\n{changelog}"
-                        await channel.send(msg)
-        except Exception as e:
-            log_info(f"Report failed: {e}")
-        finally:
-            if os.path.exists(update_file): 
-                os.remove(update_file)
-    
     if not check_for_updates.is_running():
         check_for_updates.start()
 
@@ -313,16 +313,25 @@ async def botlog(ctx):
         with open("bot_terminal.log", "r") as f:
             lines = f.readlines()
             last_10 = "".join(lines[-10:])
-            # Concatenated to avoid nested triple-backtick truncation issues
             await ctx.send("```text\n" + last_10 + "\n```")
     except Exception: await ctx.send("Log read failed.")
 
 @bot.command(name="update")
 async def update(ctx):
-    """Saves channel ID and triggers restart for manual update."""
+    """Saves channel ID as persistent update channel and triggers restart."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
+    
+    remote_hash = await fetch_remote_hash()
+    if not remote_hash:
+        return await ctx.send("❌ Could not connect to GitHub to verify version.")
+
     await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
+    
+    # Save this channel as the persistent reporting channel.
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
+    # Mark the sync flag for on_ready logic.
+    with open("pending_update.txt", "w") as f: f.write(remote_hash)
+    
     sys.exit(0)
 
 # --- AI PROCESSING ENGINE ---
