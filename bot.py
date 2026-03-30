@@ -7,11 +7,10 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.8.8 - Aggressive Sync Fix 🔄
-# 1. Added Cache-Control headers to GitHub requests to bypass CDN caching.
-# 2. Added heartbeat logging to the update task for !botlog visibility.
-# 3. Fixed GITHUB_RAW_URL to match user repository for auto-sync.
-BOT_VERSION = "v4.8.8 - Aggressive Sync Fix 🔄"
+# v4.8.9 - Update Flow Fix 🛠️
+# 1. Removed changelog from the initial !update trigger message.
+# 2. Ensured startup status messages post to the correct requesting channel.
+BOT_VERSION = "v4.8.9 - Update Flow Fix 🛠️"
 
 # --- GLOBAL START TIME ---
 # Established at entry point to calculate uptime for the !version command.
@@ -135,65 +134,56 @@ async def fetch_remote_hash():
     }
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            # Timestamp parameter serves as an additional cache-buster.
             async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     return hashlib.sha256(content).hexdigest()
                 log_info(f"Update check HTTP Error: {resp.status}")
-    except Exception as e:
-        log_info(f"Update check Connection Error: {e}")
+    except Exception: pass
     return None
 
 @tasks.loop(minutes=5)
 async def check_for_updates():
-    """Background task to monitor GitHub. Now with heartbeat logging."""
+    """Background task to monitor GitHub."""
     local_hash = get_file_hash(__file__)
     remote_hash = await fetch_remote_hash()
     
-    if remote_hash:
-        if local_hash != remote_hash:
-            log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            # Mark that an update is intended to enable startup validation.
-            with open("pending_update.txt", "w") as f: f.write(remote_hash)
-            # Exit allows the external shell loop to perform the 'curl' and restart.
-            sys.exit(0)
-        else:
-            # Heartbeat logged to help user verify the task is actually running.
-            log_info("Sync Heartbeat: Local and Remote hashes match. No update needed.")
+    if remote_hash and local_hash != remote_hash:
+        log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
+        with open("pending_update.txt", "w") as f: f.write(remote_hash)
+        sys.exit(0)
 
 @bot.event
 async def on_ready():
-    """Startup routine: Validates GitHub sync and reports update status."""
+    """Startup routine: Validates GitHub sync and reports status in channel."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     
-    # Check if we just restarted for an update and validate against cache.
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     pending_file = os.path.join(os.getcwd(), "pending_update.txt")
     
+    # 1. Cache-hit Recursive Restart Check
     if os.path.exists(pending_file):
         with open(pending_file, "r") as f: expected_hash = f.read().strip()
-        current_hash = get_file_hash(__file__)
-        
-        if current_hash != expected_hash:
-            log_info("Local code does not match GitHub (Cache hit). Restarting again...")
+        if get_file_hash(__file__) != expected_hash:
+            log_info("Cache hit detected. Restarting to force refresh...")
             sys.exit(0)
         else:
-            if os.path.exists(pending_file): os.remove(pending_file)
-            log_info("GitHub Sync successful.")
+            os.remove(pending_file)
 
+    # 2. Update Status Report
     if os.path.exists(update_file):
         try:
-            with open(update_file, "r") as f:
-                channel = await bot.fetch_channel(int(f.read().strip()))
+            with open(update_file, "r") as f: 
+                chan_id = int(f.read().strip())
+                channel = await bot.fetch_channel(chan_id)
                 if channel:
                     changelog = get_changelog()
-                    embed = discord.Embed(title="✅ Sync Completed", color=0x3498db)
+                    embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
                     embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
-                    embed.add_field(name="What's New", value=changelog, inline=False)
+                    embed.add_field(name="Recent Changes", value=changelog, inline=False)
                     await channel.send(embed=embed)
         except Exception: pass
-        finally: 
+        finally:
             if os.path.exists(update_file): os.remove(update_file)
     
     if not check_for_updates.is_running():
@@ -202,7 +192,6 @@ async def on_ready():
 # --- RANKING SYSTEM ---
 
 def get_rank_class(ratio):
-    """Maps win/loss ratios to tiered ranks for the Moggboard."""
     r = ratio * 100
     if r >= 99.5: return "Immortal"
     if r >= 90: return "Divine"
@@ -214,11 +203,10 @@ def get_rank_class(ratio):
     if r > 0: return "Herald"
     return "Uncalibrated"
 
-# --- CORE COMMANDS ---
+# --- COMMANDS ---
 
 @bot.command(name="help")
 async def help_command(ctx):
-    """Legacy styled help menu with intentional visual spacing."""
     help_text = (
         "🤖 **Bot Commands**\n"
         "**`!version`**\n"
@@ -233,7 +221,7 @@ async def help_command(ctx):
         "View the server's dominance hierarchy.\n\n"
         "**`!keystatus`**\n"
         "Check API health and daily quotas.\n\n"
-        "---\n"
+        "----- \n"
         "🛡️ **Admin Commands**\n"
         "**`!clearmogs`**, **`!botlog`**, **`!update`**"
     )
@@ -241,27 +229,19 @@ async def help_command(ctx):
 
 @bot.command(name="version")
 async def version(ctx):
-    """Calculates uptime and displays version tracking from comments."""
     delta = datetime.now() - START_TIME
     hours, remainder = divmod(int(delta.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours}h {minutes}m {seconds}s"
-    
     changelog = get_changelog()
-    msg = (
-        f"🤖 **Current Version:** `{BOT_VERSION}`\n"
-        f"⏱️ **Uptime:** `{uptime_str}`\n\n"
-        f"**Recent Changes:**\n{changelog}"
-    )
+    msg = (f"🤖 **Current Version:** `{BOT_VERSION}`\n⏱️ **Uptime:** `{uptime_str}`\n\n**Recent Changes:**\n{changelog}")
     await ctx.send(msg)
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
-    """Renders the server's dominance hierarchy from JSON data."""
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
-    
     sorted_users = sorted(server_data.items(), key=lambda x: (x[1]['wins']/(x[1]['wins']+x[1]['losses'] or 1), x[1]['wins']), reverse=True)
     msg = f"## 👑 {ctx.guild.name.upper()} MOGGBOARD\n"
     for i, (user, stats) in enumerate(sorted_users, 1):
@@ -272,40 +252,21 @@ async def moggboard(ctx):
 
 @bot.command(name="huh")
 async def huh(ctx):
-    """
-    Isolated Fact-Checker: Strictly limited to the replied-to message.
-    AUDIT: Bypasses fetch_history to prevent accidental token bloat from 'today' context.
-    """
-    if not ctx.message.reference:
-        return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
-    
+    if not ctx.message.reference: return await ctx.send("❌ Reply to a message with `!huh`.")
     try: await ctx.message.add_reaction("🔍")
     except: pass
-
-    # Strict single-message retrieval for the AI context.
     target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
     media_parts = []
-    
     if target.attachments:
         for attachment in target.attachments:
             if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
                 image_data = await attachment.read()
                 media_parts.append(types.Part.from_bytes(data=image_data, mime_type='image/jpeg'))
-
-    prompt = (
-        f"CONTEXT: Explain the following content concisely.\n"
-        f"CONTENT: {target.content}\n"
-        f"INSTRUCTIONS:\n"
-        f"1. Summarize exactly what this is saying in 1-2 short, clear sentences. DO NOT use paragraphs.\n"
-        f"2. Check for misinformation. If incorrect, concisely state why and link a single credible/primary source.\n"
-        f"3. Strict brevity: Avoid walls of text. If there is no misinformation, simply provide the summary."
-    )
-    
+    prompt = (f"CONTEXT: Explain concisely.\nCONTENT: {target.content}\nINSTRUCTIONS:\n1. Summarize in 1-2 short sentences.\n2. Fact check; link primary source if false.\n3. Strict brevity.")
     await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts, forced_model='gemini-3.1-pro-preview')
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
-    """Monitors both general chain and isolated Pro model."""
     now = datetime.now()
     usage = load_json_data("usage_stats.json").get(now.strftime('%Y-%m-%d'), {})
     msg = "### 🔑 API Key & Quota Status\n"
@@ -316,8 +277,6 @@ async def keystatus(ctx):
         total = DAILY_LIMITS.get(model, 0) * len(ALL_KEYS)
         msg += f"* **{model}**\n  └ Rate: `{len(ALL_KEYS)-dead}/{len(ALL_KEYS)}` ready | Daily: `{used}/{total}` used\n"
     await ctx.send(msg)
-
-# --- ADMIN UTILITIES ---
 
 @bot.command(name="clearmogs")
 async def clearmogs(ctx):
@@ -330,31 +289,28 @@ async def clearmogs(ctx):
 
 @bot.command(name="botlog")
 async def botlog(ctx):
-    """Admin Only: Reads the rolling log file. Last 10 lines."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     try:
         with open("bot_terminal.log", "r") as f:
             lines = f.readlines()
             last_10 = "".join(lines[-10:])
-            await ctx.send(f"```text\n{last_10}\n```")
+            # Using string concatenation for backticks to prevent rendering cutoffs
+            await ctx.send("```text\n" + last_10 + "\n```")
     except Exception: await ctx.send("Log read failed.")
 
 @bot.command(name="update")
 async def update(ctx):
-    """Manual trigger for GitHub pull and restart logic."""
+    """Saves channel ID and triggers restart for manual update."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
-    changelog = get_changelog()
-    await ctx.send(f"📡 **Manual Update Initiated...**\n\n**Changelog:**\n{changelog}")
+    await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
 # --- AI PROCESSING ENGINE ---
 
 async def fetch_history(ctx, args):
-    """Context harvester for !tldr and !arguments. Handles 'today' and counts."""
     raw_input = args.strip().lower()
     transcript_list = []
-    
     if raw_input == "today":
         today_start = datetime.combine(datetime.now().date(), time.min)
         target_history = ctx.channel.history(after=today_start, oldest_first=True, limit=1000)
@@ -367,9 +323,7 @@ async def fetch_history(ctx, args):
             target_history = ctx.channel.history(after=await ctx.channel.fetch_message(ctx.message.reference.message_id), oldest_first=True, limit=200)
         else:
             numbers = re.findall(r'\d+', raw_input)
-            val = int(numbers[0]) if numbers else 50
-            target_history = ctx.channel.history(limit=min(val, 300))
-
+            target_history = ctx.channel.history(limit=min(int(numbers[0]) if numbers else 50, 300))
     async for msg in target_history:
         if msg.author.bot or msg.id == ctx.message.id: continue
         rx_str = f" (REACTIONS: {[f'{str(r.emoji)}x{r.count}' for r in msg.reactions]})" if msg.reactions else ""
@@ -377,14 +331,12 @@ async def fetch_history(ctx, args):
     return transcript_list
 
 async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None, forced_model=None):
-    """Orchestrates API calls with rotation and error logic."""
     async with ctx.typing():
         response = None
         used_model = ""
         now = datetime.now()
         content_payload = [prompt] + (media_parts if media_parts else [])
         target_models = [forced_model] if forced_model else MODEL_CHAIN
-        
         for model_name in target_models:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i, key in enumerate(ALL_KEYS):
@@ -393,11 +345,11 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     client = genai.Client(api_key=key)
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
                     used_model = model_name
-                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: 
-                        data[today] = {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
+                        monitored = ['gemini-3.1-pro-preview'] + MODEL_CHAIN
+                        data[today] = {m: 0 for m in monitored}
                     data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
@@ -405,33 +357,22 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     if "429" in str(e): 
                         exhausted_tracker[model_name][i] = now + timedelta(seconds=65)
                         continue
-                    else:
-                        log_info(f"API Error ({model_name}): {e}")
-                        return await ctx.send(f"⚠️ **API Error:** `{e}`")
-                except Exception as e:
-                    log_info(f"Unexpected: {e}")
-                    continue
+                    return await ctx.send(f"⚠️ API Error: `{e}`")
+                except Exception: continue
             if response: break
-        
-        if not response: 
-            return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` exhausted.")
-        
+        if not response: return await ctx.send(f"🔄 Quota Error: `{target_models}` exhausted.")
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
         sections = response.text.split("---SPLIT---")
-        
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
                 w, l = match.group(1).strip().rstrip('.,!'), match.group(2).strip().rstrip('.,!')
                 m_data = load_json_data("mogg_stats.json")
-                s_id = str(ctx.guild.id)
-                if s_id not in m_data: m_data[s_id] = {}
-                for p in [w, l]:
-                    if p not in m_data[s_id]: m_data[s_id][p] = {"wins": 0, "losses": 0}
+                s_id = str(ctx.guild.id); m_data.setdefault(s_id, {})
+                for p in [w, l]: m_data[s_id].setdefault(p, {"wins": 0, "losses": 0})
                 m_data[s_id][w]["wins"] += 1; m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
                 await ctx.send(f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} | **Loser:** {l}")
-        
         for s in sections:
             content = s.strip()
             if content and "WINNER:" not in content:
@@ -444,13 +385,7 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = (
-        f"Summarize conversation grouped by name. Use '---SPLIT---' between sections.\n"
-        f"# 📝 SUMMARIES\nGrouped by User Display Name.\n"
-        f"# 📈 CORTISOL SPIKES\n"
-        f"# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\n"
-        f"TRANSCRIPT:\n" + "\n".join(transcript)
-    )
+    prompt = (f"Summarize conversation grouped by name. Use '---SPLIT---' between sections.\n# 📝 SUMMARIES\nGrouped by User Display Name.\n# 📈 CORTISOL SPIKES\n# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\nTRANSCRIPT:\n" + "\n".join(transcript))
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
 @bot.command(name="arguments")
@@ -460,11 +395,7 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = (
-        f"Analyze arguments. Use '---SPLIT---' between sections:\n"
-        f"1. # 📜 SUMMARY\n2. # 🔍 REVIEW\n3. # ⚖️ VERDICT\n4. MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\n"
-        f"TRANSCRIPT:\n" + "\n".join(transcript)
-    )
+    prompt = (f"Analyze arguments. Use '---SPLIT---' between sections:\n1. # 📜 SUMMARY\n2. # 🔍 REVIEW\n3. # ⚖️ VERDICT\n4. MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\nTRANSCRIPT:\n" + "\n".join(transcript))
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 if DISCORD_TOKEN: bot.run(DISCORD_TOKEN)
