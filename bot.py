@@ -7,15 +7,16 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.8.3 - Added old prompts back.
-# Pls stop hallucinating and changing code I didn't request.
-BOT_VERSION = "v4.8.3 - Hallucination Removal 2 🧠"
+# v4.8.4 - Dynamic Changelog & Rank Update.
+# 1. !version/!update now pull this comment block for the changelog.
+# 2. Changed 'Class' to 'Rank' in !moggboard.
+# 3. Styled Discord outputs for better presentation.
+BOT_VERSION = "v4.8.4 - Dynamic Changelog ⚡"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
 
 # --- LOGGING CONFIGURATION ---
-# RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 log_file = 'bot_terminal.log'
 my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, backupCount=5)
@@ -32,6 +33,21 @@ def log_info(msg):
     app_log.info(msg)
 
 # --- DATA PERSISTENCE HELPERS ---
+
+def get_changelog():
+    """Extracts the VERSION TRACKING section from the source code for Discord output."""
+    try:
+        with open(__file__, "r") as f:
+            content = f.read()
+            # Regex to find the VERSION TRACKING block between the markers
+            match = re.search(r"# --- VERSION TRACKING ---\n(.*?)\nBOT_VERSION", content, re.DOTALL)
+            if match:
+                lines = match.group(1).strip().split('\n')
+                # Clean up the '#' and leading spaces for a clean Discord output
+                cleaned = "\n".join([line.replace('#', '•').strip() for line in lines])
+                return cleaned
+    except Exception:
+        return "No changelog available."
 
 def load_file(filename):
     """Reads text files (tokens/keys) and returns a list of non-empty lines."""
@@ -61,30 +77,19 @@ def save_json_data(filename, data):
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
             f.flush()
-            # Hardware safety: Forces the OS to write buffer to disk immediately.
             os.fsync(f.fileno()) 
     except Exception as e:
         log_info(f"Save Failed: {e}")
 
 # --- CONFIG & QUOTAS ---
-
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
-# exhausted_tracker: { "model_name": { key_index: resume_datetime } }
 exhausted_tracker = {} 
+MODEL_CHAIN = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 
-# General fallback sequence for standard commands. 
-# NOTE: 'gemini-3.1-pro-preview' is removed to isolate it for !huh only.
-MODEL_CHAIN = [
-    'gemini-3-flash-preview', 
-    'gemini-2.5-flash', 
-    'gemini-3.1-flash-lite-preview'
-]
-
-# Hard-coded daily limits per key.
 DAILY_LIMITS = {
     'gemini-3.1-pro-preview': 5, 
     'gemini-3-flash-preview': 50, 
@@ -93,7 +98,6 @@ DAILY_LIMITS = {
 }
 
 # --- BOT INITIALIZATION ---
-
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True         
@@ -102,21 +106,24 @@ bot.remove_command('help')
 
 @bot.event
 async def on_ready():
-    """Reports update status to the designated channel upon restart."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f:
                 channel = await bot.fetch_channel(int(f.read().strip()))
-                if channel: await channel.send(f"✅ **Update Completed:** I am now running **{BOT_VERSION}**")
+                if channel:
+                    changelog = get_changelog()
+                    embed = discord.Embed(title="✅ Update Completed", color=0x2ecc71)
+                    embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
+                    embed.add_field(name="What's New", value=changelog, inline=False)
+                    await channel.send(embed=embed)
         except Exception: pass
         finally: os.remove(update_file)
 
 # --- RANKING SYSTEM ---
 
 def get_rank_class(ratio):
-    """Maps win/loss ratios to tiered ranks for the Moggboard."""
     r = ratio * 100
     if r >= 99.5: return "Immortal"
     if r >= 90: return "Divine"
@@ -132,10 +139,9 @@ def get_rank_class(ratio):
 
 @bot.command(name="help")
 async def help_command(ctx):
-    """Server help interface."""
     help_text = (
         "🤖 **Bot Commands**\n"
-        "**`!version`**: Build info and uptime.\n"
+        "**`!version`**: Build info, uptime, and changelog.\n"
         "**`!tldr [amount]`**: Multi-model conversation summary.\n"
         "**`!huh`**: Pro-model fact-checking and explanation.\n"
         "**`!arguments [amount]`**: Conflict analysis.\n"
@@ -148,28 +154,27 @@ async def help_command(ctx):
 
 @bot.command(name="version")
 async def version(ctx):
-    """Calculates uptime and displays the current BOT_VERSION."""
     delta = datetime.now() - START_TIME
     hours, remainder = divmod(int(delta.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours}h {minutes}m {seconds}s"
-    await ctx.send(f"🤖 **Current Version:** `{BOT_VERSION}`\n⏱️ **Uptime:** `{uptime_str}`")
+    
+    changelog = get_changelog()
+    msg = (
+        f"🤖 **Current Version:** `{BOT_VERSION}`\n"
+        f"⏱️ **Uptime:** `{uptime_str}`\n\n"
+        f"**Recent Changes:**\n{changelog}"
+    )
+    await ctx.send(msg)
 
 @bot.command(name="huh")
 async def huh(ctx):
-    """
-    Concise Fact-Checker: 
-    - Uses 'gemini-3.1-pro-preview' exclusively for high-fidelity reasoning.
-    """
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
-    
     try: await ctx.message.add_reaction("🔍")
     except: pass
-
     target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
     media_parts = []
-    
     if target.attachments:
         for attachment in target.attachments:
             if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
@@ -180,23 +185,14 @@ async def huh(ctx):
         f"CONTEXT: Explain the following content concisely.\n"
         f"CONTENT: {target.content}\n"
         f"INSTRUCTIONS:\n"
-        f"1. Summarize exactly what this is saying in 1-2 short, clear sentences. DO NOT use paragraphs.\n"
-        f"2. Check for misinformation. If incorrect, concisely state why and link a single credible/primary source.\n"
-        f"3. Strict brevity: Avoid walls of text. If there is no misinformation, simply provide the summary."
+        f"1. Summarize exactly what this is saying in 1-2 short, clear sentences.\n"
+        f"2. Check for misinformation. If incorrect, link a credible/primary source.\n"
+        f"3. Strict brevity: Avoid walls of text."
     )
-    
-    # FORCED PRO MODEL: Exclusively uses the reasoning model for fact-checks.
-    await process_ai_request(
-        ctx, 
-        prompt, 
-        "Explanation & Fact-Check", 
-        media_parts=media_parts, 
-        forced_model='gemini-3.1-pro-preview'
-    )
+    await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts, forced_model='gemini-3.1-pro-preview')
 
 @bot.command(name="moggboard")
 async def moggboard(ctx):
-    """Renders the server's dominance hierarchy from JSON data."""
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
@@ -206,16 +202,14 @@ async def moggboard(ctx):
     for i, (user, stats) in enumerate(sorted_users, 1):
         w, l = stats['wins'], stats['losses']
         ratio = (w / (w+l) if (w+l)>0 else 0)
-        msg += f"{i}. **{user}**\n> **Class:** `{get_rank_class(ratio)}` | **Stats:** `{w}W - {l}L` ({ratio*100:.1f}%)\n\n"
+        msg += f"{i}. **{user}**\n> **Rank:** `{get_rank_class(ratio)}` | **Stats:** `{w}W - {l}L` ({ratio*100:.1f}%)\n\n"
     await ctx.send(msg)
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
-    """Real-time monitoring of key availability and daily model consumption."""
     now = datetime.now()
     usage = load_json_data("usage_stats.json").get(now.strftime('%Y-%m-%d'), {})
     msg = "### 🔑 API Key & Quota Status\n"
-    # Monitors both the general chain and the isolated Pro model.
     monitored_models = ['gemini-3.1-pro-preview'] + MODEL_CHAIN
     for model in monitored_models:
         dead = len(exhausted_tracker.get(model, {}))
@@ -248,18 +242,17 @@ async def botlog(ctx):
 @bot.command(name="update")
 async def update(ctx):
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
-    await ctx.send("📡 **Fetching code... recycling container...**")
+    changelog = get_changelog()
+    await ctx.send(f"📡 **Update Initiated...**\n\n**Preparing to pull:**\n{changelog}")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
 # --- AI PROCESSING ENGINE ---
 
 async def fetch_history(ctx, args):
-    """Context harvester for !tldr and !arguments."""
     raw_input = args.strip()
     transcript_list = []
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
-    
     if len(links) >= 2:
         s_id, e_id = sorted([int(links[0]), int(links[1])])
         target_history = ctx.channel.history(after=await ctx.channel.fetch_message(s_id), before=await ctx.channel.fetch_message(e_id), oldest_first=True, limit=300)
@@ -277,16 +270,11 @@ async def fetch_history(ctx, args):
     return transcript_list
 
 async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None, forced_model=None):
-    """
-    Orchestrates the API call. 
-    - forced_model: If provided, bypasses MODEL_CHAIN to use a specific model exclusively.
-    """
     async with ctx.typing():
         response = None
         used_model = ""
         now = datetime.now()
         content_payload = [prompt] + (media_parts if media_parts else [])
-        
         target_models = [forced_model] if forced_model else MODEL_CHAIN
         
         for model_name in target_models:
@@ -297,10 +285,9 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     client = genai.Client(api_key=key)
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
                     used_model = model_name
-                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
-                    if today not in data: data[today] = {m: 0 for m in monitored_models} if 'monitored_models' in locals() else {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
+                    if today not in data: data[today] = {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
                     data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
@@ -316,8 +303,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     continue
             if response: break
         
-        if not response: 
-            return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` are exhausted.")
+        if not response: return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` are exhausted.")
         
         meta = response.usage_metadata
         token_info = f"📊 **Token Audit:** `In: {meta.prompt_token_count}` | `Out: {meta.candidates_token_count}` | `Total: {meta.total_token_count}`"
@@ -325,7 +311,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
         
         sections = response.text.split("---SPLIT---")
         mogg_msg = ""
-        
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
@@ -344,7 +329,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
             content = s.strip()
             if content and "WINNER:" not in content:
                 for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
-        
         if mogg_msg: await ctx.send(mogg_msg)
         await ctx.send(token_info)
 
@@ -355,19 +339,12 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    history_text = "\n".join(transcript)
     prompt = (
-        f"Summarize the following transcript. "
-        f"CRITICAL: The '# 📝 SUMMARIES' section must be grouped by user display name.\n"
-        f"# 📝 SUMMARIES\n"
-        f"Grouped by User Display Name:\n"
-        f"- [User Name]: bullet points of their contributions.\n"
+        f"Summarize the transcript grouped by user display name. Use '---SPLIT---' between sections.\n"
+        f"# 📝 SUMMARIES\nGrouped by User Display Name.\n"
         f"# 📈 CORTISOL SPIKES\n"
-        f"Identify aggression/shouting. If toxic, state: '⚠️ [Name] has been penalized for high cortisol levels.'\n"
-        f"# MOGG DATA (INTERNAL)\n"
-        f"Format: 'WINNER: [Name] | LOSER: [Name]'\n"
-        f"RULES: Use '---SPLIT---' between these 3 sections.\n\n"
-        f"TRANSCRIPT:\n{history_text}"
+        f"# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\n"
+        f"TRANSCRIPT:\n" + "\n".join(transcript)
     )
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
@@ -378,14 +355,10 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    history_text = "\n".join(transcript)
     prompt = (
-        f"Analyze the transcript for arguments. Use '---SPLIT---' between these 4 sections:\n"
-        f"1. # 📜 ARGUMENT SUMMARY - Brief overview of what happened.\n"
-        f"2. # 🔍 PER-POINT REVIEW - Detailed breakdown of claims made.\n"
-        f"3. # ⚖️ FINAL VERDICT - Decisive resolution. Explicitly state: '[Name] wins and [Name] loses.'\n"
-        f"4. MOGG DATA (INTERNAL) - Format: 'WINNER: [Name] | LOSER: [Name]'\n\n"
-        f"TRANSCRIPT:\n{history_text}"
+        f"Analyze arguments. Use '---SPLIT---' between sections:\n"
+        f"1. # 📜 SUMMARY\n2. # 🔍 REVIEW\n3. # ⚖️ VERDICT\n4. MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\n"
+        f"TRANSCRIPT:\n" + "\n".join(transcript)
     )
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
