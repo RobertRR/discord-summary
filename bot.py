@@ -7,17 +7,18 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.8.7 - Strict Reply Isolation.
-# 1. Isolated !huh logic to ensure it ONLY processes the replied-to message.
-# 2. Prevented 'today' or 'count' arguments from affecting !huh context.
-BOT_VERSION = "v4.8.7 - Strict Reply Isolation 🔒"
+# v4.8.8 - Aggressive Sync Fix 🔄
+# 1. Added Cache-Control headers to GitHub requests to bypass CDN caching.
+# 2. Added heartbeat logging to the update task for !botlog visibility.
+# 3. Fixed GITHUB_RAW_URL to match user repository for auto-sync.
+BOT_VERSION = "v4.8.8 - Aggressive Sync Fix 🔄"
 
 # --- GLOBAL START TIME ---
 # Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
-# NOTE: Replace with your actual Raw GitHub URL for the auto-sync to function.
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/USER/REPO/main/bot.py"
+# NOTE: The raw URL for the GitHub Auto-Sync feature.
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/Deages/discord-summary/main/bot.py"
 
 # --- LOGGING CONFIGURATION ---
 # RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
@@ -58,7 +59,6 @@ def load_file(filename):
         with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        log_info(f"CRITICAL: {filename} missing.")
         return []
 
 def load_json_data(filename):
@@ -68,7 +68,8 @@ def load_json_data(filename):
     try:
         with open(path, "r") as f:
             return json.loads(f.read().strip())
-    except Exception: return {}
+    except Exception:
+        return {}
 
 def save_json_data(filename, data):
     """Saves data with os.fsync to ensure disk commitment and prevent corruption."""
@@ -126,35 +127,47 @@ def get_file_hash(filepath):
     return sha256_hash.hexdigest()
 
 async def fetch_remote_hash():
-    """Fetches the latest hash from GitHub with a cache-buster param."""
+    """Fetches remote hash with strict no-cache headers to bypass CDN."""
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
     try:
-        async with aiohttp.ClientSession() as session:
-            # Append timestamp to bypass GitHub CDN caching
+        async with aiohttp.ClientSession(headers=headers) as session:
+            # Timestamp parameter serves as an additional cache-buster.
             async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     return hashlib.sha256(content).hexdigest()
+                log_info(f"Update check HTTP Error: {resp.status}")
     except Exception as e:
-        log_info(f"Update check failed: {e}")
+        log_info(f"Update check Connection Error: {e}")
     return None
 
 @tasks.loop(minutes=5)
 async def check_for_updates():
-    """Background task to monitor GitHub for new code versions."""
+    """Background task to monitor GitHub. Now with heartbeat logging."""
     local_hash = get_file_hash(__file__)
     remote_hash = await fetch_remote_hash()
     
-    if remote_hash and local_hash != remote_hash:
-        log_info("Update detected on GitHub. Triggering restart...")
-        # Mark that an update is intended to enable startup validation
-        with open("pending_update.txt", "w") as f: f.write(remote_hash)
-        sys.exit(0)
+    if remote_hash:
+        if local_hash != remote_hash:
+            log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
+            # Mark that an update is intended to enable startup validation.
+            with open("pending_update.txt", "w") as f: f.write(remote_hash)
+            # Exit allows the external shell loop to perform the 'curl' and restart.
+            sys.exit(0)
+        else:
+            # Heartbeat logged to help user verify the task is actually running.
+            log_info("Sync Heartbeat: Local and Remote hashes match. No update needed.")
 
 @bot.event
 async def on_ready():
     """Startup routine: Validates GitHub sync and reports update status."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     
+    # Check if we just restarted for an update and validate against cache.
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     pending_file = os.path.join(os.getcwd(), "pending_update.txt")
     
@@ -166,7 +179,7 @@ async def on_ready():
             log_info("Local code does not match GitHub (Cache hit). Restarting again...")
             sys.exit(0)
         else:
-            os.remove(pending_file)
+            if os.path.exists(pending_file): os.remove(pending_file)
             log_info("GitHub Sync successful.")
 
     if os.path.exists(update_file):
@@ -180,7 +193,8 @@ async def on_ready():
                     embed.add_field(name="What's New", value=changelog, inline=False)
                     await channel.send(embed=embed)
         except Exception: pass
-        finally: os.remove(update_file)
+        finally: 
+            if os.path.exists(update_file): os.remove(update_file)
     
     if not check_for_updates.is_running():
         check_for_updates.start()
@@ -221,12 +235,7 @@ async def help_command(ctx):
         "Check API health and daily quotas.\n\n"
         "---\n"
         "🛡️ **Admin Commands**\n"
-        "**`!clearmogs`**\n"
-        "Resets Moggboard data to zero.\n\n"
-        "**`!botlog`**\n"
-        "Displays the last 10 lines of the terminal log.\n\n"
-        "**`!update`**\n"
-        "Pulls latest code from GitHub and restarts the container."
+        "**`!clearmogs`**, **`!botlog`**, **`!update`**"
     )
     await ctx.send(help_text)
 
@@ -321,6 +330,7 @@ async def clearmogs(ctx):
 
 @bot.command(name="botlog")
 async def botlog(ctx):
+    """Admin Only: Reads the rolling log file. Last 10 lines."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     try:
         with open("bot_terminal.log", "r") as f:
@@ -386,7 +396,8 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
-                    if today not in data: data[today] = {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
+                    if today not in data: 
+                        data[today] = {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
                     data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
