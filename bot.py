@@ -7,14 +7,14 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.0 - Update Flow Refinement 🛠️
-# 1. Simplified manual !update confirmation message (removed changelog).
-# 2. Fixed post-update reporting to ensure the bot returns to the original channel.
-# 3. Maintained all NUC safety protocols (os.fsync) and isolated Pro reasoning.
-BOT_VERSION = "v4.9.0 - Update Flow Refinement 🛠️"
+# v4.9.1 - Permissions & Aggressive Sync Fix 🛠️
+# 1. Added permission validation to update reporting to prevent 403 Forbidden errors.
+# 2. Re-implemented aggressive GitHub sync with strict no-cache headers and URL timestamping.
+# 3. Restored heartbeat logging to verify sync tasks in !botlog.
+# 4. Cleaned version tracking to remove redundant maintenance entries.
+BOT_VERSION = "v4.9.1 - Permissions & Aggressive Sync Fix 🛠️"
 
 # --- GLOBAL START TIME ---
-# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
 # NOTE: The raw URL for the GitHub Auto-Sync feature.
@@ -127,7 +127,7 @@ def get_file_hash(filepath):
     return sha256_hash.hexdigest()
 
 async def fetch_remote_hash():
-    """Fetches remote hash with strict no-cache headers to bypass CDN."""
+    """Fetches remote hash with strict no-cache headers to bypass GitHub CDN."""
     headers = {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -135,24 +135,29 @@ async def fetch_remote_hash():
     }
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
+            # Timestamp parameter serves as an additional cache-buster.
             async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     return hashlib.sha256(content).hexdigest()
                 log_info(f"Update check HTTP Error: {resp.status}")
-    except Exception: pass
+    except Exception as e:
+        log_info(f"Update check Connection Error: {e}")
     return None
 
 @tasks.loop(minutes=5)
 async def check_for_updates():
-    """Background task to monitor GitHub."""
+    """Background task to monitor GitHub with heartbeat logging."""
     local_hash = get_file_hash(__file__)
     remote_hash = await fetch_remote_hash()
     
-    if remote_hash and local_hash != remote_hash:
-        log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-        with open("pending_update.txt", "w") as f: f.write(remote_hash)
-        sys.exit(0)
+    if remote_hash:
+        if local_hash != remote_hash:
+            log_info(f"UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
+            with open("pending_update.txt", "w") as f: f.write(remote_hash)
+            sys.exit(0)
+        else:
+            log_info("Sync Heartbeat: Local and Remote hashes match.")
 
 @bot.event
 async def on_ready():
@@ -171,7 +176,7 @@ async def on_ready():
         else:
             os.remove(pending_file)
 
-    # 2. Update Status Report (Success message + Changelog)
+    # 2. Update Status Report with Permission Check
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f: 
@@ -179,11 +184,21 @@ async def on_ready():
             
             channel = await bot.fetch_channel(chan_id)
             if channel:
-                changelog = get_changelog()
-                embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
-                embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
-                embed.add_field(name="Recent Changes", value=changelog, inline=False)
-                await channel.send(embed=embed)
+                # Permission Audit: Ensure we can send messages and embeds
+                perms = channel.permissions_for(channel.guild.me)
+                if not perms.send_messages:
+                    log_info(f"Aborting update report: Missing send_messages perms in {chan_id}")
+                else:
+                    changelog = get_changelog()
+                    if perms.embed_links:
+                        embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
+                        embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
+                        embed.add_field(name="Recent Changes", value=changelog, inline=False)
+                        await channel.send(embed=embed)
+                    else:
+                        # Fallback to plain text if Embed Links permission is missing
+                        msg = f"✅ **Update Successful**\n**Version:** `{BOT_VERSION}`\n**Recent Changes:**\n{changelog}"
+                        await channel.send(msg)
         except Exception as e:
             log_info(f"Report failed: {e}")
         finally:
