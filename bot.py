@@ -1,22 +1,28 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
-import re, asyncio, functools, sys, os, json, logging
+import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # --- VERSION TRACKING ---
-# v4.8.4 - Dynamic Changelog & Rank Update.
-# 1. !version/!update now pull this comment block for the changelog.
-# 2. Changed 'Class' to 'Rank' in !moggboard.
-# 3. Styled Discord outputs for better presentation.
-BOT_VERSION = "v4.8.4 - Dynamic Changelog ⚡"
+# v4.8.5 - GitHub Auto-Sync Edition.
+# 1. Added background task to check GitHub for changes every 5 mins.
+# 2. Implemented recursive restart logic to bypass GitHub CDN caching.
+# 3. Maintained 'Rank' terminology and dynamic changelog.
+# 4. Integrated !version/!update changelog extraction.
+BOT_VERSION = "v4.8.5 - GitHub Auto-Sync 🔄"
 
 # --- GLOBAL START TIME ---
+# Established at entry point to calculate uptime for the !version command.
 START_TIME = datetime.now()
 
+# NOTE: Replace with your actual Raw GitHub URL for the auto-sync to function.
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/USER/REPO/main/bot.py"
+
 # --- LOGGING CONFIGURATION ---
+# RotatingFileHandler prevents 'bot_terminal.log' from bloating the NUC's storage.
 log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 log_file = 'bot_terminal.log'
 my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024, backupCount=5)
@@ -39,11 +45,9 @@ def get_changelog():
     try:
         with open(__file__, "r") as f:
             content = f.read()
-            # Regex to find the VERSION TRACKING block between the markers
             match = re.search(r"# --- VERSION TRACKING ---\n(.*?)\nBOT_VERSION", content, re.DOTALL)
             if match:
                 lines = match.group(1).strip().split('\n')
-                # Clean up the '#' and leading spaces for a clean Discord output
                 cleaned = "\n".join([line.replace('#', '•').strip() for line in lines])
                 return cleaned
     except Exception:
@@ -66,9 +70,7 @@ def load_json_data(filename):
     try:
         with open(path, "r") as f:
             return json.loads(f.read().strip())
-    except Exception as e:
-        log_info(f"JSON Load Error ({filename}): {e}")
-        return {}
+    except Exception: return {}
 
 def save_json_data(filename, data):
     """Saves data with os.fsync to ensure disk commitment and prevent corruption."""
@@ -77,19 +79,29 @@ def save_json_data(filename, data):
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
             f.flush()
+            # Hardware safety: Forces the OS to write buffer to disk immediately.
             os.fsync(f.fileno()) 
     except Exception as e:
         log_info(f"Save Failed: {e}")
 
 # --- CONFIG & QUOTAS ---
+
 token_list = load_file("discordtoken.txt")
 DISCORD_TOKEN = token_list[0] if token_list else None
 ALL_KEYS = load_file("keys.txt")
 ADMIN_IDS = [int(i) for i in load_file("admins.txt")]
 
+# exhausted_tracker: { "model_name": { key_index: resume_datetime } }
 exhausted_tracker = {} 
-MODEL_CHAIN = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
 
+# General fallback sequence for standard commands. 
+MODEL_CHAIN = [
+    'gemini-3-flash-preview', 
+    'gemini-2.5-flash', 
+    'gemini-3.1-flash-lite-preview'
+]
+
+# Hard-coded daily limits per key.
 DAILY_LIMITS = {
     'gemini-3.1-pro-preview': 5, 
     'gemini-3-flash-preview': 50, 
@@ -98,32 +110,89 @@ DAILY_LIMITS = {
 }
 
 # --- BOT INITIALIZATION ---
+
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True         
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command('help')
 
+# --- UPDATE UTILITIES ---
+
+def get_file_hash(filepath):
+    """Generates a SHA256 hash of a file to detect content changes."""
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+async def fetch_remote_hash():
+    """Fetches the latest hash from GitHub with a cache-buster param."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Append timestamp to bypass GitHub CDN caching
+            async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    return hashlib.sha256(content).hexdigest()
+    except Exception as e:
+        log_info(f"Update check failed: {e}")
+    return None
+
+@tasks.loop(minutes=5)
+async def check_for_updates():
+    """Background task to monitor GitHub for new code versions."""
+    local_hash = get_file_hash(__file__)
+    remote_hash = await fetch_remote_hash()
+    
+    if remote_hash and local_hash != remote_hash:
+        log_info("Update detected on GitHub. Triggering restart...")
+        # Mark that an update is intended to enable startup validation
+        with open("pending_update.txt", "w") as f: f.write(remote_hash)
+        # Assuming the external Docker/Systemd loop handles the 'git pull' on exit
+        sys.exit(0)
+
 @bot.event
 async def on_ready():
+    """Startup routine: Validates GitHub sync and reports update status."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
+    
+    # Check if we just restarted for an update and validate against cache
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
+    pending_file = os.path.join(os.getcwd(), "pending_update.txt")
+    
+    if os.path.exists(pending_file):
+        with open(pending_file, "r") as f: expected_hash = f.read().strip()
+        current_hash = get_file_hash(__file__)
+        
+        if current_hash != expected_hash:
+            log_info("Local code does not match GitHub (Cache hit). Restarting again...")
+            sys.exit(0)
+        else:
+            os.remove(pending_file)
+            log_info("GitHub Sync successful.")
+
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f:
                 channel = await bot.fetch_channel(int(f.read().strip()))
                 if channel:
                     changelog = get_changelog()
-                    embed = discord.Embed(title="✅ Update Completed", color=0x2ecc71)
+                    embed = discord.Embed(title="✅ Sync Completed", color=0x3498db)
                     embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
                     embed.add_field(name="What's New", value=changelog, inline=False)
                     await channel.send(embed=embed)
         except Exception: pass
         finally: os.remove(update_file)
+    
+    if not check_for_updates.is_running():
+        check_for_updates.start()
 
 # --- RANKING SYSTEM ---
 
 def get_rank_class(ratio):
+    """Maps win/loss ratios to tiered ranks for the Moggboard."""
     r = ratio * 100
     if r >= 99.5: return "Immortal"
     if r >= 90: return "Divine"
@@ -139,21 +208,35 @@ def get_rank_class(ratio):
 
 @bot.command(name="help")
 async def help_command(ctx):
+    """Legacy styled help menu with intentional visual spacing."""
     help_text = (
         "🤖 **Bot Commands**\n"
-        "**`!version`**: Build info, uptime, and changelog.\n"
-        "**`!tldr [amount]`**: Multi-model conversation summary.\n"
-        "**`!huh`**: Pro-model fact-checking and explanation.\n"
-        "**`!arguments [amount]`**: Conflict analysis.\n"
-        "**`!moggboard`**: View server hierarchy.\n"
-        "**`!keystatus`**: Check API health/quotas.\n"
+        "**`!version`**\n"
+        "Shows build version, uptime, and changelog.\n\n"
+        "**`!tldr [amount]`**\n"
+        "Summaries + Cortisol Spike detection.\n\n"
+        "**`!huh`**\n"
+        "Reply to a message to explain content and fact-check claims.\n\n"
+        "**`!arguments [amount]`**\n"
+        "Conflict Analysis and Mogg updates.\n\n"
+        "**`!moggboard`**\n"
+        "View the server's dominance hierarchy.\n\n"
+        "**`!keystatus`**\n"
+        "Check API health and daily quotas.\n\n"
         "---\n"
-        "🛡️ **Admin**: `!clearmogs`, `!botlog`, `!update`"
+        "🛡️ **Admin Commands**\n"
+        "**`!clearmogs`**\n"
+        "Resets Moggboard data to zero.\n\n"
+        "**`!botlog`**\n"
+        "Displays the last 10 lines of the terminal log.\n\n"
+        "**`!update`**\n"
+        "Pulls latest code from GitHub and restarts the container."
     )
     await ctx.send(help_text)
 
 @bot.command(name="version")
 async def version(ctx):
+    """Calculates uptime and displays version tracking from comments."""
     delta = datetime.now() - START_TIME
     hours, remainder = divmod(int(delta.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -167,32 +250,9 @@ async def version(ctx):
     )
     await ctx.send(msg)
 
-@bot.command(name="huh")
-async def huh(ctx):
-    if not ctx.message.reference:
-        return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
-    try: await ctx.message.add_reaction("🔍")
-    except: pass
-    target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-    media_parts = []
-    if target.attachments:
-        for attachment in target.attachments:
-            if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
-                image_data = await attachment.read()
-                media_parts.append(types.Part.from_bytes(data=image_data, mime_type='image/jpeg'))
-
-    prompt = (
-        f"CONTEXT: Explain the following content concisely.\n"
-        f"CONTENT: {target.content}\n"
-        f"INSTRUCTIONS:\n"
-        f"1. Summarize exactly what this is saying in 1-2 short, clear sentences.\n"
-        f"2. Check for misinformation. If incorrect, link a credible/primary source.\n"
-        f"3. Strict brevity: Avoid walls of text."
-    )
-    await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts, forced_model='gemini-3.1-pro-preview')
-
 @bot.command(name="moggboard")
 async def moggboard(ctx):
+    """Renders the server's dominance hierarchy from JSON data."""
     all_data = load_json_data("mogg_stats.json")
     server_data = all_data.get(str(ctx.guild.id), {})
     if not server_data: return await ctx.send("Moggboard is currently empty.")
@@ -205,8 +265,38 @@ async def moggboard(ctx):
         msg += f"{i}. **{user}**\n> **Rank:** `{get_rank_class(ratio)}` | **Stats:** `{w}W - {l}L` ({ratio*100:.1f}%)\n\n"
     await ctx.send(msg)
 
+@bot.command(name="huh")
+async def huh(ctx):
+    """Pro-model fact-checking: Requires a message reply."""
+    if not ctx.message.reference:
+        return await ctx.send("❌ You must reply to a message with `!huh` to use this feature.")
+    
+    try: await ctx.message.add_reaction("🔍")
+    except: pass
+
+    target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+    media_parts = []
+    
+    if target.attachments:
+        for attachment in target.attachments:
+            if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'webp']):
+                image_data = await attachment.read()
+                media_parts.append(types.Part.from_bytes(data=image_data, mime_type='image/jpeg'))
+
+    prompt = (
+        f"CONTEXT: Explain concisely.\n"
+        f"CONTENT: {target.content}\n"
+        f"INSTRUCTIONS:\n"
+        f"1. Summarize in 1-2 sentences. No paragraphs.\n"
+        f"2. Fact check; if incorrect, concisely state why and link a primary source.\n"
+        f"3. Strict brevity."
+    )
+    
+    await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts, forced_model='gemini-3.1-pro-preview')
+
 @bot.command(name="keystatus")
 async def keystatus(ctx):
+    """Monitors both general chain and isolated Pro model."""
     now = datetime.now()
     usage = load_json_data("usage_stats.json").get(now.strftime('%Y-%m-%d'), {})
     msg = "### 🔑 API Key & Quota Status\n"
@@ -241,18 +331,21 @@ async def botlog(ctx):
 
 @bot.command(name="update")
 async def update(ctx):
+    """Manual trigger for GitHub pull and restart logic."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
     changelog = get_changelog()
-    await ctx.send(f"📡 **Update Initiated...**\n\n**Preparing to pull:**\n{changelog}")
+    await ctx.send(f"📡 **Manual Update Initiated...**\n\n**Changelog:**\n{changelog}")
     with open("update_channel.txt", "w") as f: f.write(str(ctx.channel.id))
     sys.exit(0)
 
 # --- AI PROCESSING ENGINE ---
 
 async def fetch_history(ctx, args):
+    """Context harvester for !tldr and !arguments."""
     raw_input = args.strip()
     transcript_list = []
     links = re.findall(r'https://discord\.com/channels/\d+/\d+/(\d+)', raw_input)
+    
     if len(links) >= 2:
         s_id, e_id = sorted([int(links[0]), int(links[1])])
         target_history = ctx.channel.history(after=await ctx.channel.fetch_message(s_id), before=await ctx.channel.fetch_message(e_id), oldest_first=True, limit=300)
@@ -270,6 +363,7 @@ async def fetch_history(ctx, args):
     return transcript_list
 
 async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None, forced_model=None):
+    """Orchestrates API calls with rotation and error logic."""
     async with ctx.typing():
         response = None
         used_model = ""
@@ -285,6 +379,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     client = genai.Client(api_key=key)
                     response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
                     used_model = model_name
+                    
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: data[today] = {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
@@ -303,14 +398,12 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     continue
             if response: break
         
-        if not response: return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` are exhausted.")
+        if not response: 
+            return await ctx.send(f"🔄 **Quota Error:** All keys for `{target_models}` are exhausted.")
         
-        meta = response.usage_metadata
-        token_info = f"📊 **Token Audit:** `In: {meta.prompt_token_count}` | `Out: {meta.candidates_token_count}` | `Total: {meta.total_token_count}`"
         await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
-        
         sections = response.text.split("---SPLIT---")
-        mogg_msg = ""
+        
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
@@ -320,17 +413,14 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                 if s_id not in m_data: m_data[s_id] = {}
                 for p in [w, l]:
                     if p not in m_data[s_id]: m_data[s_id][p] = {"wins": 0, "losses": 0}
-                m_data[s_id][w]["wins"] += 1
-                m_data[s_id][l]["losses"] += 1
+                m_data[s_id][w]["wins"] += 1; m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
-                mogg_msg = f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} (+1W) | **Loser:** {l} (+1L)\n* **Updated:** `{w}: {m_data[s_id][w]['wins']}W` | `{l}: {m_data[s_id][l]['losses']}L`"
+                await ctx.send(f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} | **Loser:** {l}")
         
         for s in sections:
             content = s.strip()
             if content and "WINNER:" not in content:
                 for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
-        if mogg_msg: await ctx.send(mogg_msg)
-        await ctx.send(token_info)
 
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
@@ -340,7 +430,7 @@ async def tldr(ctx, *, args: str = "50"):
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
     prompt = (
-        f"Summarize the transcript grouped by user display name. Use '---SPLIT---' between sections.\n"
+        f"Summarize conversation grouped by name. Use '---SPLIT---' between sections.\n"
         f"# 📝 SUMMARIES\nGrouped by User Display Name.\n"
         f"# 📈 CORTISOL SPIKES\n"
         f"# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\n"
