@@ -7,10 +7,11 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.8.9 - Update Flow Fix 🛠️
-# 1. Removed changelog from the initial !update trigger message.
-# 2. Ensured startup status messages post to the correct requesting channel.
-BOT_VERSION = "v4.8.9 - Update Flow Fix 🛠️"
+# v4.9.0 - Update Flow Refinement 🛠️
+# 1. Simplified manual !update confirmation message (removed changelog).
+# 2. Fixed post-update reporting to ensure the bot returns to the original channel.
+# 3. Maintained all NUC safety protocols (os.fsync) and isolated Pro reasoning.
+BOT_VERSION = "v4.9.0 - Update Flow Refinement 🛠️"
 
 # --- GLOBAL START TIME ---
 # Established at entry point to calculate uptime for the !version command.
@@ -170,21 +171,24 @@ async def on_ready():
         else:
             os.remove(pending_file)
 
-    # 2. Update Status Report
+    # 2. Update Status Report (Success message + Changelog)
     if os.path.exists(update_file):
         try:
             with open(update_file, "r") as f: 
                 chan_id = int(f.read().strip())
-                channel = await bot.fetch_channel(chan_id)
-                if channel:
-                    changelog = get_changelog()
-                    embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
-                    embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
-                    embed.add_field(name="Recent Changes", value=changelog, inline=False)
-                    await channel.send(embed=embed)
-        except Exception: pass
+            
+            channel = await bot.fetch_channel(chan_id)
+            if channel:
+                changelog = get_changelog()
+                embed = discord.Embed(title="✅ Update Successful", color=0x3498db)
+                embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
+                embed.add_field(name="Recent Changes", value=changelog, inline=False)
+                await channel.send(embed=embed)
+        except Exception as e:
+            log_info(f"Report failed: {e}")
         finally:
-            if os.path.exists(update_file): os.remove(update_file)
+            if os.path.exists(update_file): 
+                os.remove(update_file)
     
     if not check_for_updates.is_running():
         check_for_updates.start()
@@ -203,7 +207,7 @@ def get_rank_class(ratio):
     if r > 0: return "Herald"
     return "Uncalibrated"
 
-# --- COMMANDS ---
+# --- CORE COMMANDS ---
 
 @bot.command(name="help")
 async def help_command(ctx):
@@ -294,7 +298,7 @@ async def botlog(ctx):
         with open("bot_terminal.log", "r") as f:
             lines = f.readlines()
             last_10 = "".join(lines[-10:])
-            # Using string concatenation for backticks to prevent rendering cutoffs
+            # Concatenated to avoid nested triple-backtick truncation issues
             await ctx.send("```text\n" + last_10 + "\n```")
     except Exception: await ctx.send("Log read failed.")
 
