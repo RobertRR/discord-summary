@@ -8,13 +8,11 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.0 - Video Summarization (TLDW) 📺
-# 1. Added !tldw command to summarize and fact-check YouTube videos via transcripts.
-# 2. Integrated YouTubeTranscriptApi for content extraction.
-# 3. Forced Pro model for high-fidelity video analysis and source verification.
-# 4. (Hotfix) !tldw now requires a reply to a message containing the link.
-# 5. (Hotfix) Fixed AttributeError in !tldw by using explicit class method call via lambda.
-BOT_VERSION = "v5.0.0 - Video Summarization 📺"
+# v5.0.1 - Update Loop Fix 🛠️
+# 1. Added loop protection to on_ready to prevent infinite restarts on hash mismatches.
+# 2. Fixed f-string logging in startup verification logic.
+# 3. Added detailed hash logging for sync troubleshooting.
+BOT_VERSION = "v5.0.1 - Update Loop Fix 🛠️"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -167,7 +165,8 @@ async def check_for_updates():
     if remote_hash:
         if local_hash != remote_hash:
             log_info(f"AUTO-UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            save_text_safe("pending_update.txt", f"{remote_hash}|auto")
+            # Store hash, type, and attempt count (0)
+            save_text_safe("pending_update.txt", f"{remote_hash}|auto|0")
             sys.exit(0)
         else:
             log_info(f"Heartbeat: GitHub Sync Check - No changes found (Remote: {remote_hash[:8]})")
@@ -184,16 +183,24 @@ async def on_ready():
         with open(pending_file, "r") as f: 
             raw_pending = f.read().strip()
         
-        if "|" in raw_pending:
-            expected_hash, update_type = raw_pending.split("|", 1)
-        else:
-            expected_hash, update_type = raw_pending, "manual"
+        # Format: hash|type|retries
+        parts = raw_pending.split("|")
+        expected_hash = parts[0]
+        update_type = parts[1] if len(parts) > 1 else "manual"
+        retries = int(parts[2]) if len(parts) > 2 else 0
 
         current_hash = get_file_hash(__file__)
+        
         if current_hash != expected_hash:
-            log_info(f"Cache hit detected during {update_type} update. Restarting...")
-            sys.exit(0)
+            if retries < 1:
+                log_info(f"Sync mismatch during {update_type} update. Expected {expected_hash[:8]}, found {current_hash[:8]}. Retrying once...")
+                save_text_safe("pending_update.txt", f"{expected_hash}|{update_type}|{retries + 1}")
+                sys.exit(0)
+            else:
+                log_info(f"CRITICAL: Sync failed after retry. Expected {expected_hash[:8]}, got {current_hash[:8]}. Aborting loop.")
+                os.remove(pending_file)
         else:
+            # Hash matches! Update was successful.
             log_info(f"Verified successful {update_type} sync. Posting report...")
             
             if os.path.exists(update_file):
@@ -255,7 +262,7 @@ async def help_command(ctx):
         "**`!version`**\n"
         "Shows build version, uptime, and changelog.\n\n"
         "**`!tldr [amount/today]`**\n"
-        "Summaries + Cortisol Spike detection.\n\n"
+        "Summaries + Cortisol Spike detection. Use 'today' for all msgs since 12am.\n\n"
         "**`!tldw`**\n"
         "**(Reply Required)** Summarizes and fact-checks a YouTube video link.\n\n"
         "**`!huh`**\n"
@@ -436,7 +443,8 @@ async def update(ctx):
     await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
     
     save_text_safe("update_channel.txt", str(ctx.channel.id))
-    save_text_safe("pending_update.txt", f"{remote_hash}|manual")
+    # Mark as manual update with 0 retries
+    save_text_safe("pending_update.txt", f"{remote_hash}|manual|0")
     
     sys.exit(0)
 
