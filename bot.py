@@ -11,12 +11,11 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.5 - Intelligence Fallback & Search Grounding 🛰️
-# 1. Enabled Google Search tool for !tldw to allow AI to "research" videos when transcripts fail.
-# 2. Added library diagnostic logging on startup to troubleshoot Docker environment.
-# 3. Unified TLDW to use Pro model with grounding for high-fidelity fact-checking.
-# 4. Maintained hardware safety (fsync), update loop protection, and all existing features.
-BOT_VERSION = "v5.0.5 - Search Grounding 🛰️"
+# v5.0.6 - TLDW Polish & Cortisol Cost-Save 💸
+# 1. Switched !cortisolcheck from Pro model to Flash chain to save credits.
+# 2. Refined !tldw prompt to strictly use bullet points for summary, assessment, and sources.
+# 3. Moved model/usage info to the bottom of AI responses for all commands.
+BOT_VERSION = "v5.0.6 - TLDW Polish 💸"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -179,7 +178,6 @@ async def on_ready():
     """Startup routine: Validates sync, performs diagnostics."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     
-    # Library Diagnostic: Helps determine why the Transcript API is failing
     if YouTubeTranscriptApi:
         log_info(f"YT API Diagnostic: {dir(YouTubeTranscriptApi)}")
     else:
@@ -263,13 +261,13 @@ async def help_command(ctx):
         "**`!tldr [amount/today]`**\n"
         "Summaries + Cortisol Spike detection.\n\n"
         "**`!tldw`**\n"
-        "**(Reply Required)** Summarizes and fact-checks a YouTube video link via AI research.\n\n"
+        "**(Reply Required)** Summarizes and fact-checks a YouTube video link.\n\n"
         "**`!huh`**\n"
         "**(Reply Required)** Explains content and fact-checks a single message.\n\n"
         "**`!arguments [amount/today]`**\n"
         "Conflict Analysis and Mogg updates.\n\n"
         "**`!cortisolcheck @name`**\n"
-        "Analyzes user aggression from the last 30m or last 20 messages.\n\n"
+        "Analyzes user aggression levels (Flash model).\n\n"
         "**`!moggboard`**\n"
         "View the server's dominance hierarchy.\n\n"
         "**`!keystatus`**\n"
@@ -320,7 +318,7 @@ async def huh(ctx):
 
 @bot.command(name="cortisolcheck")
 async def cortisolcheck(ctx, member: discord.Member):
-    """Analyzes user messages for stress/aggression."""
+    """Analyzes user messages using standard model chain."""
     try: await ctx.message.add_reaction("🧪")
     except: pass
     async with ctx.typing():
@@ -338,11 +336,12 @@ async def cortisolcheck(ctx, member: discord.Member):
         if not transcript_list:
             return await ctx.send(f"⚠️ No message history found for **{member.display_name}**.")
         prompt = (f"Analyze messages from **{member.display_name}**. INSTRUCTIONS: 1. Detect cortisol/aggression. 2. Extremely short diagnostic. 3. Themed emojis. 4. No treatment advice.\nTRANSCRIPT:\n" + "\n".join(transcript_list))
-        await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}", forced_model='gemini-3.1-pro-preview')
+        # Use None for forced_model to default to standard MODEL_CHAIN
+        await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}", forced_model=None)
 
 @bot.command(name="tldw")
 async def tldw(ctx):
-    """Summarizes and fact-checks a YouTube video by sending the URL to Gemini with Search enabled."""
+    """Summarizes and fact-checks a YouTube video with bullet point formatting."""
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message containing a YouTube link with `!tldw`.")
     
@@ -360,15 +359,13 @@ async def tldw(ctx):
             
             video_url = match.group(1)
             
-            # Logic: Use Gemini 3.1 Pro WITH Search Grounding to research the video.
-            # This bypasses the need for local transcript parsing entirely.
             prompt = (
                 f"You are a research assistant. Research this YouTube video: {video_url}\n\n"
                 "INSTRUCTIONS:\n"
-                "1. Provide a short summary of 2-3 sentences at most for what this video is about.\n"
-                "2. Provide an assessment on whether it is factually accurate in its key messages or if it is misinformation.\n"
-                "3. Provide a credible authoritative source reference to support that assessment.\n"
-                "4. Use bullet points and emojis for the formatting."
+                "1. Provide a short summary of 2-3 sentences at most for what this video is about. Use bullet points.\n"
+                "2. Provide an assessment on whether it is factually accurate in its key messages or if it is misinformation. Use bullet points.\n"
+                "3. Provide a credible authoritative source reference to support that assessment. Use bullet points.\n"
+                "4. Use emojis for formatting."
             )
             
             await process_ai_request(ctx, prompt, "Video Research Analysis", forced_model='gemini-3.1-pro-preview', use_grounding=True)
@@ -458,7 +455,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
                     client = genai.Client(api_key=key)
-                    # Enable Google Search if requested
                     config = {}
                     if use_grounding:
                         config['tools'] = [{'google_search': {}}]
@@ -482,18 +478,6 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
         
         if not response: return await ctx.send(f"🔄 Quota Error: `{target_models}` exhausted.")
         
-        # Format output
-        await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`" + (" | 🛰️ `Search Grounding Active`" if use_grounding else ""))
-        
-        # Handle Grounding Metadata (sources) if present
-        source_text = ""
-        try:
-            grounding = response.candidates[0].grounding_metadata
-            if grounding and grounding.search_entry_point:
-                # We mention that search was used, the AI will provide links in text
-                pass
-        except: pass
-
         sections = response.text.split("---SPLIT---")
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
@@ -510,6 +494,12 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
             content = s.strip()
             if content and "WINNER:" not in content:
                 for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
+
+        # Provide usage/token cost info at the bottom for consistency across all commands
+        footer = f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`"
+        if use_grounding:
+            footer += " | 🛰️ `Search Grounding Active`"
+        await ctx.send(footer)
 
 @bot.command(name="tldr")
 @commands.cooldown(1, 30, commands.BucketType.channel)
