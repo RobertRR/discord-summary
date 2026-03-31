@@ -2,16 +2,21 @@ import discord
 from discord.ext import commands, tasks
 from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    YouTubeTranscriptApi = None
 import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.4 - TLDW AI Rewrite 📺
-# 1. Rewrote !tldw to bypass the failing transcript API.
-# 2. Updated !tldw logic to send the YouTube URL directly to Gemini with specific summary and fact-checking instructions.
-# 3. Removed youtube_transcript_api dependency.
-BOT_VERSION = "v5.0.4 - TLDW AI Rewrite 📺"
+# v5.0.5 - Intelligence Fallback & Search Grounding 🛰️
+# 1. Enabled Google Search tool for !tldw to allow AI to "research" videos when transcripts fail.
+# 2. Added library diagnostic logging on startup to troubleshoot Docker environment.
+# 3. Unified TLDW to use Pro model with grounding for high-fidelity fact-checking.
+# 4. Maintained hardware safety (fsync), update loop protection, and all existing features.
+BOT_VERSION = "v5.0.5 - Search Grounding 🛰️"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -164,7 +169,6 @@ async def check_for_updates():
     if remote_hash:
         if local_hash != remote_hash:
             log_info(f"AUTO-UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            # Store hash, type, and attempt count (0)
             save_text_safe("pending_update.txt", f"{remote_hash}|auto|0")
             sys.exit(0)
         else:
@@ -172,9 +176,15 @@ async def check_for_updates():
 
 @bot.event
 async def on_ready():
-    """Startup routine: Validates sync, customized reporting based on update type."""
+    """Startup routine: Validates sync, performs diagnostics."""
     log_info(f"--- {bot.user.name} ONLINE ({BOT_VERSION}) ---")
     
+    # Library Diagnostic: Helps determine why the Transcript API is failing
+    if YouTubeTranscriptApi:
+        log_info(f"YT API Diagnostic: {dir(YouTubeTranscriptApi)}")
+    else:
+        log_info("YT API Diagnostic: Library not found in path.")
+
     update_file = os.path.join(os.getcwd(), "update_channel.txt")
     pending_file = os.path.join(os.getcwd(), "pending_update.txt")
     
@@ -182,7 +192,6 @@ async def on_ready():
         with open(pending_file, "r") as f: 
             raw_pending = f.read().strip()
         
-        # Format: hash|type|retries
         parts = raw_pending.split("|")
         expected_hash = parts[0]
         update_type = parts[1] if len(parts) > 1 else "manual"
@@ -192,47 +201,38 @@ async def on_ready():
         
         if current_hash != expected_hash:
             if retries < 1:
-                log_info(f"Sync mismatch during {update_type} update. Expected {expected_hash[:8]}, found {current_hash[:8]}. Retrying once...")
+                log_info(f"Sync mismatch during {update_type} update. Retrying once...")
                 save_text_safe("pending_update.txt", f"{expected_hash}|{update_type}|{retries + 1}")
                 sys.exit(0)
             else:
-                log_info(f"CRITICAL: Sync failed after retry. Expected {expected_hash[:8]}, got {current_hash[:8]}. Aborting loop.")
+                log_info(f"CRITICAL: Sync failed after retry. Aborting loop.")
                 os.remove(pending_file)
         else:
-            # Hash matches! Update was successful.
             log_info(f"Verified successful {update_type} sync. Posting report...")
-            
             if os.path.exists(update_file):
                 try:
                     with open(update_file, "r") as f: 
                         chan_id = int(f.read().strip())
-                    
                     channel = await bot.fetch_channel(chan_id)
                     if channel:
                         my_member = channel.guild.me if hasattr(channel, "guild") else None
                         perms = channel.permissions_for(my_member) if my_member else None
-                        
                         if perms and perms.send_messages:
                             changelog = get_changelog()
                             is_auto = (update_type == "auto")
                             title = "🤖 Auto-Update Successful" if is_auto else "✅ Manual Update Successful"
                             color = 0x9b59b6 if is_auto else 0x3498db
-                            
                             if perms.embed_links:
                                 embed = discord.Embed(title=title, color=color)
                                 embed.add_field(name="Current Version", value=f"`{BOT_VERSION}`", inline=False)
-                                if is_auto:
-                                    embed.description = "*This update was automatically detected and deployed via GitHub sync.*"
+                                if is_auto: embed.description = "*This update was automatically detected and deployed.*"
                                 embed.add_field(name="Recent Changes", value=changelog, inline=False)
                                 await channel.send(embed=embed)
                             else:
-                                msg = f"**{title}**\n**Version:** `{BOT_VERSION}`\n"
-                                if is_auto: msg += "*(Automatic Sync)*\n"
-                                msg += f"**Recent Changes:**\n{changelog}"
+                                msg = f"**{title}**\n**Version:** `{BOT_VERSION}`\n{changelog}"
                                 await channel.send(msg)
                 except Exception as e:
                     log_info(f"Reporting error: {e}")
-            
             os.remove(pending_file)
 
     if not check_for_updates.is_running():
@@ -261,9 +261,9 @@ async def help_command(ctx):
         "**`!version`**\n"
         "Shows build version, uptime, and changelog.\n\n"
         "**`!tldr [amount/today]`**\n"
-        "Summaries + Cortisol Spike detection. Use 'today' for all msgs since 12am.\n\n"
+        "Summaries + Cortisol Spike detection.\n\n"
         "**`!tldw`**\n"
-        "**(Reply Required)** Analyzes and fact-checks a YouTube video link via AI query.\n\n"
+        "**(Reply Required)** Summarizes and fact-checks a YouTube video link via AI research.\n\n"
         "**`!huh`**\n"
         "**(Reply Required)** Explains content and fact-checks a single message.\n\n"
         "**`!arguments [amount/today]`**\n"
@@ -320,44 +320,29 @@ async def huh(ctx):
 
 @bot.command(name="cortisolcheck")
 async def cortisolcheck(ctx, member: discord.Member):
-    """Analyzes a specific user's messages (last 30m or last 20 msgs) for stress/aggression."""
+    """Analyzes user messages for stress/aggression."""
     try: await ctx.message.add_reaction("🧪")
     except: pass
-
     async with ctx.typing():
         time_limit = datetime.now() - timedelta(minutes=30)
         transcript_list = []
-        
         async for msg in ctx.channel.history(after=time_limit, oldest_first=True, limit=500):
             if msg.author.id == member.id:
                 transcript_list.append(f"MSG: {msg.content}")
-
         if not transcript_list:
             async for msg in ctx.channel.history(limit=2000):
                 if msg.author.id == member.id:
                     transcript_list.append(f"MSG: {msg.content}")
                     if len(transcript_list) >= 20: break
             transcript_list.reverse()
-
         if not transcript_list:
-            return await ctx.send(f"⚠️ No message history found for **{member.display_name}** in this channel.")
-
-        history_text = "\n".join(transcript_list)
-        prompt = (
-            f"DIAGNOSTIC DATA: Messages from **{member.display_name}**.\n\n"
-            f"INSTRUCTIONS:\n"
-            f"1. Analyze if 'cortisol' (aggression, toxicity, shouting, stress) is high.\n"
-            f"2. Keep the report extremely short and concise.\n"
-            f"3. Use themed emojis for every heading.\n"
-            f"4. Do NOT overdo the joke; be blunt and clinical.\n"
-            f"5. Do NOT provide a recommended treatment.\n\n"
-            f"TRANSCRIPT:\n{history_text}"
-        )
-        await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}")
+            return await ctx.send(f"⚠️ No message history found for **{member.display_name}**.")
+        prompt = (f"Analyze messages from **{member.display_name}**. INSTRUCTIONS: 1. Detect cortisol/aggression. 2. Extremely short diagnostic. 3. Themed emojis. 4. No treatment advice.\nTRANSCRIPT:\n" + "\n".join(transcript_list))
+        await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}", forced_model='gemini-3.1-pro-preview')
 
 @bot.command(name="tldw")
 async def tldw(ctx):
-    """Summarizes and fact-checks a YouTube video by sending the URL to Gemini."""
+    """Summarizes and fact-checks a YouTube video by sending the URL to Gemini with Search enabled."""
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message containing a YouTube link with `!tldw`.")
     
@@ -366,33 +351,31 @@ async def tldw(ctx):
 
     async with ctx.typing():
         try:
-            # Fetch the referenced message
             target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-            
-            # Extract YouTube URL using regex
             regex = r"(https?://(?:www\.)?(?:youtube\.com/watch\?v=[^ \n&]+|youtu\.be/[^ \n&?]+))"
             match = re.search(regex, target.content)
             
             if not match:
-                return await ctx.send("❌ Could not find a valid YouTube link in the replied message.")
+                return await ctx.send("❌ No valid YouTube link found in the replied message.")
             
             video_url = match.group(1)
-
+            
+            # Logic: Use Gemini 3.1 Pro WITH Search Grounding to research the video.
+            # This bypasses the need for local transcript parsing entirely.
             prompt = (
-                f"VIDEO URL: {video_url}\n\n"
+                f"You are a research assistant. Research this YouTube video: {video_url}\n\n"
                 "INSTRUCTIONS:\n"
-                "Provide a short summary of 2-3 sentences at most for what this video is about. "
-                "Provide an assessment on whether it is factually accurate in its key messages or if it is misinformation, "
-                "providing a credible authorative source reference to support that assessment. "
-                "Use bullet points and emojis for the formatting."
+                "1. Provide a short summary of 2-3 sentences at most for what this video is about.\n"
+                "2. Provide an assessment on whether it is factually accurate in its key messages or if it is misinformation.\n"
+                "3. Provide a credible authoritative source reference to support that assessment.\n"
+                "4. Use bullet points and emojis for the formatting."
             )
             
-            # Use Pro model for high-fidelity fact-checking
-            await process_ai_request(ctx, prompt, "Video Summary & Fact-Check", forced_model='gemini-3.1-pro-preview')
+            await process_ai_request(ctx, prompt, "Video Research Analysis", forced_model='gemini-3.1-pro-preview', use_grounding=True)
             
         except Exception as e:
             log_info(f"TLDW Command Error: {e}")
-            await ctx.send("⚠️ Error processing the video link analysis.")
+            await ctx.send("⚠️ Error researching the video content.")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
@@ -430,17 +413,11 @@ async def botlog(ctx):
 async def update(ctx):
     """Saves channel ID and triggers restart for manual update."""
     if ctx.author.id not in ADMIN_IDS: return await ctx.send("⛔ Denied.")
-    
     remote_hash = await fetch_remote_hash()
-    if not remote_hash:
-        return await ctx.send("❌ Could not connect to GitHub to verify version.")
-
-    await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
-    
+    if not remote_hash: return await ctx.send("❌ GitHub Connection Failed.")
+    await ctx.send("📡 **Manual update initiated. Syncing code...**")
     save_text_safe("update_channel.txt", str(ctx.channel.id))
-    # Mark as manual update with 0 retries
     save_text_safe("pending_update.txt", f"{remote_hash}|manual|0")
-    
     sys.exit(0)
 
 # --- AI PROCESSING ENGINE ---
@@ -467,26 +444,31 @@ async def fetch_history(ctx, args):
         transcript_list.append(f"USER: {msg.author.display_name} | MSG: {msg.content}{rx_str}")
     return transcript_list
 
-async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None, forced_model=None):
+async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts=None, forced_model=None, use_grounding=False):
     async with ctx.typing():
         response = None
         used_model = ""
         now = datetime.now()
         content_payload = [prompt] + (media_parts if media_parts else [])
         target_models = [forced_model] if forced_model else MODEL_CHAIN
+        
         for model_name in target_models:
             if model_name not in exhausted_tracker: exhausted_tracker[model_name] = {}
             for i, key in enumerate(ALL_KEYS):
                 if i in exhausted_tracker[model_name] and now < exhausted_tracker[model_name][i]: continue
                 try:
                     client = genai.Client(api_key=key)
-                    response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload)
+                    # Enable Google Search if requested
+                    config = {}
+                    if use_grounding:
+                        config['tools'] = [{'google_search': {}}]
+                    
+                    response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=content_payload, config=config)
                     used_model = model_name
                     today = now.strftime('%Y-%m-%d')
                     data = load_json_data("usage_stats.json")
                     if today not in data: 
-                        monitored = ['gemini-3.1-pro-preview'] + MODEL_CHAIN
-                        data[today] = {m: 0 for m in monitored}
+                        data[today] = {m: 0 for m in (['gemini-3.1-pro-preview'] + MODEL_CHAIN)}
                     data[today][model_name] = data[today].get(model_name, 0) + 1
                     save_json_data("usage_stats.json", data)
                     break 
@@ -497,8 +479,21 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                     return await ctx.send(f"⚠️ API Error: `{e}`")
                 except Exception: continue
             if response: break
+        
         if not response: return await ctx.send(f"🔄 Quota Error: `{target_models}` exhausted.")
-        await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`")
+        
+        # Format output
+        await ctx.send(f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`" + (" | 🛰️ `Search Grounding Active`" if use_grounding else ""))
+        
+        # Handle Grounding Metadata (sources) if present
+        source_text = ""
+        try:
+            grounding = response.candidates[0].grounding_metadata
+            if grounding and grounding.search_entry_point:
+                # We mention that search was used, the AI will provide links in text
+                pass
+        except: pass
+
         sections = response.text.split("---SPLIT---")
         if update_stats:
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
@@ -510,6 +505,7 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                 m_data[s_id][w]["wins"] += 1; m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
                 await ctx.send(f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} | **Loser:** {l}")
+        
         for s in sections:
             content = s.strip()
             if content and "WINNER:" not in content:
