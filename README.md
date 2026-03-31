@@ -9,6 +9,7 @@ A lightweight, Dockerized Discord bot that summarizes channel conversations and 
 * **Smart Summaries:** The `!tldr` command will group by user display name with clean headers and bulleted contributions.
 * **Pro-Reasoning Fact-Checker:** The `!huh` command exclusively utilizes the **Gemini 3.1 Pro** model to analyze a single replied-to message for misinformation, providing a concise summary and credible sources.
 * **Argument Resolution:** The `!arguments` command gives decisive adjudication of conflicts based on argument strength and wit.
+* **Video Summary:** The `!tdw` command can be used as a reply to a youtube video to provide a summary and fact check/misinformation check based on the video's transcript.
 * **👑 Multi-Server Moggboard:** A competitive dominance hierarchy. The AI analyzes arguments, declares winners, and assigns **Ranks** (Immortal, Divine, Ancient, etc.) based on win/loss ratios.
 * **Autonomous Auto-Sync:** Every 5 minutes, the bot performs a background hash-check against your GitHub repository. If a change is detected, it automatically pulls the new code and restarts.
 * **API Key Rotation:** Automatically cycles through multiple Gemini API keys to maximize free-tier quotas with aggressive cache-busting headers.
