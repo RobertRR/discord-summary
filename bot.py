@@ -7,13 +7,10 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.4 - Update Distinction & Safety Fix 🛠️
-# 1. Fixed wording for auto-update success messages to distinguish from manual updates.
-# 2. Re-implemented hardware-safe file writes with fsync for update tracking.
-# 3. Enhanced aggressive GitHub sync with improved error handling and cache-busting.
-# 4. Fixed f-string logging bug in startup recursive restart check.
-# 5. Optimized permission handling to prevent 403 errors during status reporting.
-BOT_VERSION = "v4.9.4 - Update Distinction 🛠️"
+# v4.9.5 - Cortisol Check & Logic Cleanup 🧬
+# 1. Added !cortisolcheck command to analyze specific user toxicity over a 30-min window.
+# 2. Fixed auto-update message wording to ensure "Auto-Update" is correctly reported.
+BOT_VERSION = "v4.9.5 - Cortisol Check 🧬"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -166,7 +163,7 @@ async def check_for_updates():
     if remote_hash:
         if local_hash != remote_hash:
             log_info(f"AUTO-UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            # Force commit to disk before exiting to ensure flag is read on boot
+            # Mark with auto flag explicitly
             save_text_safe("pending_update.txt", f"{remote_hash}|auto")
             sys.exit(0)
         else:
@@ -193,7 +190,7 @@ async def on_ready():
         # 1. Cache-hit Recursive Restart Check (Aggressive)
         current_hash = get_file_hash(__file__)
         if current_hash != expected_hash:
-            log_info(f"Cache hit detected during {update_type} update. Expected {expected_hash[:8]} but found {current_hash[:8]}. Restarting...")
+            log_info(f"Cache hit detected during {update_type} update. Restarting...")
             sys.exit(0)
         else:
             # Hash matches! Update was successful.
@@ -206,13 +203,13 @@ async def on_ready():
                     
                     channel = await bot.fetch_channel(chan_id)
                     if channel:
-                        # Permission Audit: Ensure bot can send messages and embeds in the specific channel
                         my_member = channel.guild.me if hasattr(channel, "guild") else None
                         perms = channel.permissions_for(my_member) if my_member else None
                         
                         if perms and perms.send_messages:
                             changelog = get_changelog()
-                            is_auto = update_type == "auto"
+                            # STRICT WORDING CHECK: Ensure Auto vs Manual is clear
+                            is_auto = (update_type == "auto")
                             title = "🤖 Auto-Update Successful" if is_auto else "✅ Manual Update Successful"
                             color = 0x9b59b6 if is_auto else 0x3498db
                             
@@ -263,7 +260,9 @@ async def help_command(ctx):
         "**`!huh`**\n"
         "Reply to a message to explain content and fact-check claims.\n\n"
         "**`!arguments [amount/today]`**\n"
-        "Conflict Analysis and Mogg updates. Use 'today' for all msgs since 12am.\n\n"
+        "Conflict Analysis and Mogg updates.\n\n"
+        "**`!cortisolcheck @name`**\n"
+        "Checks specific user aggression levels from the last 30 minutes.\n\n"
         "**`!moggboard`**\n"
         "View the server's dominance hierarchy.\n\n"
         "**`!keystatus`**\n"
@@ -312,6 +311,33 @@ async def huh(ctx):
     prompt = (f"CONTEXT: Explain concisely.\nCONTENT: {target.content}\nINSTRUCTIONS:\n1. Summarize in 1-2 short sentences.\n2. Fact check; link primary source if false.\n3. Strict brevity.")
     await process_ai_request(ctx, prompt, "Explanation & Fact-Check", media_parts=media_parts, forced_model='gemini-3.1-pro-preview')
 
+@bot.command(name="cortisolcheck")
+async def cortisolcheck(ctx, member: discord.Member):
+    """Analyzes a specific user's messages from the last 30 minutes for toxicity."""
+    try: await ctx.message.add_reaction("🧬")
+    except: pass
+
+    # Fetch messages from the last 30 minutes
+    time_limit = datetime.now() - timedelta(minutes=30)
+    transcript_list = []
+    
+    async with ctx.typing():
+        async for msg in ctx.channel.history(after=time_limit, oldest_first=True, limit=500):
+            if msg.author.id == member.id:
+                transcript_list.append(f"MSG: {msg.content}")
+
+        if not transcript_list:
+            return await ctx.send(f"⚠️ No messages found from **{member.display_name}** in the last 30 minutes.")
+
+        history_text = "\n".join(transcript_list)
+        prompt = (
+            f"Analyze the following messages sent by **{member.display_name}** in the last 30 minutes. "
+            f"Determine if their 'cortisol levels' (stress, aggression, shouting, toxicity) are elevated.\n"
+            f"Provide a concise, witty, scientific-style diagnostic report.\n\n"
+            f"MESSAGES:\n{history_text}"
+        )
+        await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}")
+
 @bot.command(name="keystatus")
 async def keystatus(ctx):
     now = datetime.now()
@@ -355,7 +381,6 @@ async def update(ctx):
 
     await ctx.send("📡 **Manual update initiated. Fetching latest code and recycling container...**")
     
-    # Save parameters safely before exit
     save_text_safe("update_channel.txt", str(ctx.channel.id))
     save_text_safe("pending_update.txt", f"{remote_hash}|manual")
     
