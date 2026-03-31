@@ -2,17 +2,18 @@ import discord
 from discord.ext import commands, tasks
 from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
-import youtube_transcript_api
+from youtube_transcript_api import YouTubeTranscriptApi
 import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.2 - TLDW Attribute Fix 🛠️
-# 1. Resolved AttributeError in !tldw by using module-level access for YouTubeTranscriptApi.
-# 2. Maintained loop protection and update logic from v5.0.1.
-# 3. Cleaned up import structure for video transcript library.
-BOT_VERSION = "v5.0.2 - TLDW Attribute Fix 🛠️"
+# v5.0.3 - TLDW Robustness & Method Fix 🛠️
+# 1. Fixed AttributeError in !tldw by using list_transcripts() logic.
+# 2. Refined TLDW to explicitly handle auto-generated vs manual subtitles.
+# 3. Improved error reporting for videos with disabled or missing transcripts.
+# 4. Maintained update loop protections and hardware-safe persistence.
+BOT_VERSION = "v5.0.3 - TLDW Robustness 🛠️"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -379,11 +380,18 @@ async def tldw(ctx):
         video_id = match.group(1)
 
         try:
-            # Fetch transcript (automatically prefers manual, falls back to auto-generated)
-            # Accessing class via module to resolve static method resolution issues (AttributeError Fix)
-            api_class = youtube_transcript_api.YouTubeTranscriptApi
-            transcript_data = await asyncio.to_thread(api_class.get_transcript, video_id)
-            full_transcript = " ".join([entry['text'] for entry in transcript_data])
+            # Optimized call: list_transcripts allows for better filtering of auto-generated text
+            def get_yt_text(vid):
+                transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+                # Prefers manual English, then auto-generated English
+                try:
+                    t = transcript_list.find_transcript(['en'])
+                except:
+                    # Fallback to the first available transcript if English isn't found
+                    t = next(iter(transcript_list))
+                return " ".join([entry['text'] for entry in t.fetch()])
+
+            full_transcript = await asyncio.to_thread(get_yt_text, video_id)
             
             prompt = (
                 f"VIDEO CONTENT (TRANSCRIPT): {full_transcript[:15000]}\n\n" # Context limit safety
@@ -398,7 +406,10 @@ async def tldw(ctx):
             
         except Exception as e:
             log_info(f"TLDW Error for {video_id}: {e}")
-            await ctx.send(f"⚠️ Could not retrieve transcript for this video. (Error: {type(e).__name__})")
+            error_msg = "⚠️ Could not retrieve transcript. Transcripts might be disabled for this video."
+            if "AttributeError" in str(e):
+                error_msg = "⚠️ Internal library error encountered during transcript extraction."
+            await ctx.send(error_msg)
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
