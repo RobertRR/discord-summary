@@ -2,17 +2,17 @@ import discord
 from discord.ext import commands, tasks
 from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
-from youtube_transcript_api import YouTubeTranscriptApi
+import youtube_transcript_api
 import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.1 - Update Loop Fix 🛠️
-# 1. Added loop protection to on_ready to prevent infinite restarts on hash mismatches.
-# 2. Fixed f-string logging in startup verification logic.
-# 3. Added detailed hash logging for sync troubleshooting.
-BOT_VERSION = "v5.0.1 - Update Loop Fix 🛠️"
+# v5.0.2 - TLDW Attribute Fix 🛠️
+# 1. Resolved AttributeError in !tldw by using module-level access for YouTubeTranscriptApi.
+# 2. Maintained loop protection and update logic from v5.0.1.
+# 3. Cleaned up import structure for video transcript library.
+BOT_VERSION = "v5.0.2 - TLDW Attribute Fix 🛠️"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -380,8 +380,9 @@ async def tldw(ctx):
 
         try:
             # Fetch transcript (automatically prefers manual, falls back to auto-generated)
-            # Refined call: Uses lambda to ensure static method resolution in thread
-            transcript_data = await asyncio.to_thread(lambda: YouTubeTranscriptApi.get_transcript(video_id))
+            # Accessing class via module to resolve static method resolution issues (AttributeError Fix)
+            api_class = youtube_transcript_api.YouTubeTranscriptApi
+            transcript_data = await asyncio.to_thread(api_class.get_transcript, video_id)
             full_transcript = " ".join([entry['text'] for entry in transcript_data])
             
             prompt = (
