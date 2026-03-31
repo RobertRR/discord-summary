@@ -2,16 +2,18 @@ import discord
 from discord.ext import commands, tasks
 from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
+from youtube_transcript_api import YouTubeTranscriptApi
 import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.6 - Cortisol Refinement 🧪
-# 1. Refined !cortisolcheck logic to fall back to last 20 messages if 30m window is empty.
-# 2. Streamlined diagnostic output: shorter, more emojis, no treatment advice.
-# 3. Maintained hardware-safe persistence and aggressive sync protocols.
-BOT_VERSION = "v4.9.6 - Cortisol Refinement 🧪"
+# v4.9.7 - Video Summarization (TLDW) 📺
+# 1. Added !tldw command to summarize and fact-check YouTube videos via transcripts.
+# 2. Integrated YouTubeTranscriptApi for content extraction.
+# 3. Forced Pro model for high-fidelity video analysis and source verification.
+# 4. (Hotfix) !tldw now requires a reply to a message containing the link.
+BOT_VERSION = "v4.9.7 - Video Summarization 📺"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -164,7 +166,6 @@ async def check_for_updates():
     if remote_hash:
         if local_hash != remote_hash:
             log_info(f"AUTO-UPDATE DETECTED: Local[{local_hash[:8]}] vs Remote[{remote_hash[:8]}]")
-            # Mark with auto flag explicitly
             save_text_safe("pending_update.txt", f"{remote_hash}|auto")
             sys.exit(0)
         else:
@@ -182,19 +183,16 @@ async def on_ready():
         with open(pending_file, "r") as f: 
             raw_pending = f.read().strip()
         
-        # Determine source (Manual vs Auto) and expected hash
         if "|" in raw_pending:
             expected_hash, update_type = raw_pending.split("|", 1)
         else:
             expected_hash, update_type = raw_pending, "manual"
 
-        # 1. Cache-hit Recursive Restart Check (Aggressive)
         current_hash = get_file_hash(__file__)
         if current_hash != expected_hash:
             log_info(f"Cache hit detected during {update_type} update. Restarting...")
             sys.exit(0)
         else:
-            # Hash matches! Update was successful.
             log_info(f"Verified successful {update_type} sync. Posting report...")
             
             if os.path.exists(update_file):
@@ -256,9 +254,11 @@ async def help_command(ctx):
         "**`!version`**\n"
         "Shows build version, uptime, and changelog.\n\n"
         "**`!tldr [amount/today]`**\n"
-        "Summaries + Cortisol Spike detection. Use 'today' for all msgs since 12am.\n\n"
+        "Summaries + Cortisol Spike detection.\n\n"
+        "**`!tldw`**\n"
+        "**(Reply Required)** Summarizes and fact-checks a YouTube video link.\n\n"
         "**`!huh`**\n"
-        "Reply to a message to explain content and fact-check claims.\n\n"
+        "**(Reply Required)** Explains content and fact-checks a single message.\n\n"
         "**`!arguments [amount/today]`**\n"
         "Conflict Analysis and Mogg updates.\n\n"
         "**`!cortisolcheck @name`**\n"
@@ -318,7 +318,6 @@ async def cortisolcheck(ctx, member: discord.Member):
     except: pass
 
     async with ctx.typing():
-        # Step 1: Check the last 30 minutes
         time_limit = datetime.now() - timedelta(minutes=30)
         transcript_list = []
         
@@ -326,14 +325,12 @@ async def cortisolcheck(ctx, member: discord.Member):
             if msg.author.id == member.id:
                 transcript_list.append(f"MSG: {msg.content}")
 
-        # Step 2: Fallback to last 20 messages if 30m window is empty
         if not transcript_list:
-            log_info(f"30m window empty for {member.display_name}. Falling back to last 20 messages.")
-            async for msg in ctx.channel.history(limit=2000): # Scan reasonable history
+            async for msg in ctx.channel.history(limit=2000):
                 if msg.author.id == member.id:
                     transcript_list.append(f"MSG: {msg.content}")
                     if len(transcript_list) >= 20: break
-            transcript_list.reverse() # History fetch is newest first, reverse for chronological analysis
+            transcript_list.reverse()
 
         if not transcript_list:
             return await ctx.send(f"⚠️ No message history found for **{member.display_name}** in this channel.")
@@ -350,6 +347,48 @@ async def cortisolcheck(ctx, member: discord.Member):
             f"TRANSCRIPT:\n{history_text}"
         )
         await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}")
+
+@bot.command(name="tldw")
+async def tldw(ctx):
+    """Summarizes and fact-checks a YouTube video by searching a replied-to message for a link."""
+    if not ctx.message.reference:
+        return await ctx.send("❌ You must reply to a message containing a YouTube link with `!tldw`.")
+    
+    try: await ctx.message.add_reaction("📺")
+    except: pass
+
+    async with ctx.typing():
+        # Fetch the referenced message
+        target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        
+        # Extract Video ID using regex from the target message content
+        regex = r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^\"&?\/\s]{11})"
+        match = re.search(regex, target.content)
+        
+        if not match:
+            return await ctx.send("❌ Could not find a valid YouTube link in the replied message.")
+        
+        video_id = match.group(1)
+
+        try:
+            # Fetch transcript (automatically prefers manual, falls back to auto-generated)
+            transcript_data = await asyncio.to_thread(YouTubeTranscriptApi.get_transcript, video_id)
+            full_transcript = " ".join([entry['text'] for entry in transcript_data])
+            
+            prompt = (
+                f"VIDEO CONTENT (TRANSCRIPT): {full_transcript[:15000]}\n\n" # Context limit safety
+                f"INSTRUCTIONS:\n"
+                f"1. # 📝 SUMMARY: Provide a 2-4 sentence summary of the video content.\n"
+                f"2. # 🔍 FACT-CHECK: Perform a very brief assessment on accuracy or misinformation against credible authoritative sources.\n"
+                f"3. Reference the specific authoritative source used.\n"
+                f"Strictly use only these two sections."
+            )
+            
+            await process_ai_request(ctx, prompt, "Video Summary & Fact-Check", forced_model='gemini-3.1-pro-preview')
+            
+        except Exception as e:
+            log_info(f"TLDW Error for {video_id}: {e}")
+            await ctx.send(f"⚠️ Could not retrieve transcript for this video. (Error: {type(e).__name__})")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
