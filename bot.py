@@ -8,12 +8,13 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.7 - Video Summarization (TLDW) 📺
+# v5.0.0 - Video Summarization (TLDW) 📺
 # 1. Added !tldw command to summarize and fact-check YouTube videos via transcripts.
 # 2. Integrated YouTubeTranscriptApi for content extraction.
 # 3. Forced Pro model for high-fidelity video analysis and source verification.
 # 4. (Hotfix) !tldw now requires a reply to a message containing the link.
-BOT_VERSION = "v4.9.7 - Video Summarization 📺"
+# 5. (Hotfix) Fixed AttributeError in !tldw by using explicit class method call via lambda.
+BOT_VERSION = "v5.0.0 - Video Summarization 📺"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -372,7 +373,8 @@ async def tldw(ctx):
 
         try:
             # Fetch transcript (automatically prefers manual, falls back to auto-generated)
-            transcript_data = await asyncio.to_thread(YouTubeTranscriptApi.get_transcript, video_id)
+            # Refined call: Uses lambda to ensure static method resolution in thread
+            transcript_data = await asyncio.to_thread(lambda: YouTubeTranscriptApi.get_transcript(video_id))
             full_transcript = " ".join([entry['text'] for entry in transcript_data])
             
             prompt = (
@@ -380,8 +382,8 @@ async def tldw(ctx):
                 f"INSTRUCTIONS:\n"
                 f"1. # 📝 SUMMARY: Provide a 2-4 sentence summary of the video content.\n"
                 f"2. # 🔍 FACT-CHECK: Perform a very brief assessment on accuracy or misinformation against credible authoritative sources.\n"
-                f"3. Reference the specific authoritative source used.\n"
-                f"Strictly use only these two sections."
+                f"3. REFERENCE: Provide a reference to the specific authoritative source(s) used for the fact-check.\n"
+                f"Strictly use only these two sections. Be concise."
             )
             
             await process_ai_request(ctx, prompt, "Video Summary & Fact-Check", forced_model='gemini-3.1-pro-preview')
