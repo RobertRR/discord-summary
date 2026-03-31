@@ -2,18 +2,16 @@ import discord
 from discord.ext import commands, tasks
 from google import genai
 from google.genai import errors, types # types is required for Part.from_bytes (Multimodal)
-from youtube_transcript_api import YouTubeTranscriptApi
 import re, asyncio, functools, sys, os, json, logging, hashlib, aiohttp
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.3 - TLDW Robustness & Method Fix 🛠️
-# 1. Fixed AttributeError in !tldw by using list_transcripts() logic.
-# 2. Refined TLDW to explicitly handle auto-generated vs manual subtitles.
-# 3. Improved error reporting for videos with disabled or missing transcripts.
-# 4. Maintained update loop protections and hardware-safe persistence.
-BOT_VERSION = "v5.0.3 - TLDW Robustness 🛠️"
+# v5.0.4 - TLDW AI Rewrite 📺
+# 1. Rewrote !tldw to bypass the failing transcript API.
+# 2. Updated !tldw logic to send the YouTube URL directly to Gemini with specific summary and fact-checking instructions.
+# 3. Removed youtube_transcript_api dependency.
+BOT_VERSION = "v5.0.4 - TLDW AI Rewrite 📺"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -265,7 +263,7 @@ async def help_command(ctx):
         "**`!tldr [amount/today]`**\n"
         "Summaries + Cortisol Spike detection. Use 'today' for all msgs since 12am.\n\n"
         "**`!tldw`**\n"
-        "**(Reply Required)** Summarizes and fact-checks a YouTube video link.\n\n"
+        "**(Reply Required)** Analyzes and fact-checks a YouTube video link via AI query.\n\n"
         "**`!huh`**\n"
         "**(Reply Required)** Explains content and fact-checks a single message.\n\n"
         "**`!arguments [amount/today]`**\n"
@@ -359,7 +357,7 @@ async def cortisolcheck(ctx, member: discord.Member):
 
 @bot.command(name="tldw")
 async def tldw(ctx):
-    """Summarizes and fact-checks a YouTube video by searching a replied-to message for a link."""
+    """Summarizes and fact-checks a YouTube video by sending the URL to Gemini."""
     if not ctx.message.reference:
         return await ctx.send("❌ You must reply to a message containing a YouTube link with `!tldw`.")
     
@@ -367,49 +365,34 @@ async def tldw(ctx):
     except: pass
 
     async with ctx.typing():
-        # Fetch the referenced message
-        target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-        
-        # Extract Video ID using regex from the target message content
-        regex = r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^\"&?\/\s]{11})"
-        match = re.search(regex, target.content)
-        
-        if not match:
-            return await ctx.send("❌ Could not find a valid YouTube link in the replied message.")
-        
-        video_id = match.group(1)
-
         try:
-            # Optimized call: list_transcripts allows for better filtering of auto-generated text
-            def get_yt_text(vid):
-                transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
-                # Prefers manual English, then auto-generated English
-                try:
-                    t = transcript_list.find_transcript(['en'])
-                except:
-                    # Fallback to the first available transcript if English isn't found
-                    t = next(iter(transcript_list))
-                return " ".join([entry['text'] for entry in t.fetch()])
-
-            full_transcript = await asyncio.to_thread(get_yt_text, video_id)
+            # Fetch the referenced message
+            target = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             
+            # Extract YouTube URL using regex
+            regex = r"(https?://(?:www\.)?(?:youtube\.com/watch\?v=[^ \n&]+|youtu\.be/[^ \n&?]+))"
+            match = re.search(regex, target.content)
+            
+            if not match:
+                return await ctx.send("❌ Could not find a valid YouTube link in the replied message.")
+            
+            video_url = match.group(1)
+
             prompt = (
-                f"VIDEO CONTENT (TRANSCRIPT): {full_transcript[:15000]}\n\n" # Context limit safety
-                f"INSTRUCTIONS:\n"
-                f"1. # 📝 SUMMARY: Provide a 2-4 sentence summary of the video content.\n"
-                f"2. # 🔍 FACT-CHECK: Perform a very brief assessment on accuracy or misinformation against credible authoritative sources.\n"
-                f"3. REFERENCE: Provide a reference to the specific authoritative source(s) used for the fact-check.\n"
-                f"Strictly use only these two sections. Be concise."
+                f"VIDEO URL: {video_url}\n\n"
+                "INSTRUCTIONS:\n"
+                "Provide a short summary of 2-3 sentences at most for what this video is about. "
+                "Provide an assessment on whether it is factually accurate in its key messages or if it is misinformation, "
+                "providing a credible authorative source reference to support that assessment. "
+                "Use bullet points and emojis for the formatting."
             )
             
+            # Use Pro model for high-fidelity fact-checking
             await process_ai_request(ctx, prompt, "Video Summary & Fact-Check", forced_model='gemini-3.1-pro-preview')
             
         except Exception as e:
-            log_info(f"TLDW Error for {video_id}: {e}")
-            error_msg = "⚠️ Could not retrieve transcript. Transcripts might be disabled for this video."
-            if "AttributeError" in str(e):
-                error_msg = "⚠️ Internal library error encountered during transcript extraction."
-            await ctx.send(error_msg)
+            log_info(f"TLDW Command Error: {e}")
+            await ctx.send("⚠️ Error processing the video link analysis.")
 
 @bot.command(name="keystatus")
 async def keystatus(ctx):
