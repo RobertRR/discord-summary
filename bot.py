@@ -7,10 +7,11 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v4.9.5 - Cortisol Check & Logic Cleanup 🧬
-# 1. Added !cortisolcheck command to analyze specific user toxicity over a 30-min window.
-# 2. Fixed auto-update message wording to ensure "Auto-Update" is correctly reported.
-BOT_VERSION = "v4.9.5 - Cortisol Check 🧬"
+# v4.9.6 - Cortisol Refinement 🧪
+# 1. Refined !cortisolcheck logic to fall back to last 20 messages if 30m window is empty.
+# 2. Streamlined diagnostic output: shorter, more emojis, no treatment advice.
+# 3. Maintained hardware-safe persistence and aggressive sync protocols.
+BOT_VERSION = "v4.9.6 - Cortisol Refinement 🧪"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -208,7 +209,6 @@ async def on_ready():
                         
                         if perms and perms.send_messages:
                             changelog = get_changelog()
-                            # STRICT WORDING CHECK: Ensure Auto vs Manual is clear
                             is_auto = (update_type == "auto")
                             title = "🤖 Auto-Update Successful" if is_auto else "✅ Manual Update Successful"
                             color = 0x9b59b6 if is_auto else 0x3498db
@@ -262,7 +262,7 @@ async def help_command(ctx):
         "**`!arguments [amount/today]`**\n"
         "Conflict Analysis and Mogg updates.\n\n"
         "**`!cortisolcheck @name`**\n"
-        "Checks specific user aggression levels from the last 30 minutes.\n\n"
+        "Analyzes user aggression from the last 30m or last 20 messages.\n\n"
         "**`!moggboard`**\n"
         "View the server's dominance hierarchy.\n\n"
         "**`!keystatus`**\n"
@@ -313,28 +313,41 @@ async def huh(ctx):
 
 @bot.command(name="cortisolcheck")
 async def cortisolcheck(ctx, member: discord.Member):
-    """Analyzes a specific user's messages from the last 30 minutes for toxicity."""
-    try: await ctx.message.add_reaction("🧬")
+    """Analyzes a specific user's messages (last 30m or last 20 msgs) for stress/aggression."""
+    try: await ctx.message.add_reaction("🧪")
     except: pass
 
-    # Fetch messages from the last 30 minutes
-    time_limit = datetime.now() - timedelta(minutes=30)
-    transcript_list = []
-    
     async with ctx.typing():
+        # Step 1: Check the last 30 minutes
+        time_limit = datetime.now() - timedelta(minutes=30)
+        transcript_list = []
+        
         async for msg in ctx.channel.history(after=time_limit, oldest_first=True, limit=500):
             if msg.author.id == member.id:
                 transcript_list.append(f"MSG: {msg.content}")
 
+        # Step 2: Fallback to last 20 messages if 30m window is empty
         if not transcript_list:
-            return await ctx.send(f"⚠️ No messages found from **{member.display_name}** in the last 30 minutes.")
+            log_info(f"30m window empty for {member.display_name}. Falling back to last 20 messages.")
+            async for msg in ctx.channel.history(limit=2000): # Scan reasonable history
+                if msg.author.id == member.id:
+                    transcript_list.append(f"MSG: {msg.content}")
+                    if len(transcript_list) >= 20: break
+            transcript_list.reverse() # History fetch is newest first, reverse for chronological analysis
+
+        if not transcript_list:
+            return await ctx.send(f"⚠️ No message history found for **{member.display_name}** in this channel.")
 
         history_text = "\n".join(transcript_list)
         prompt = (
-            f"Analyze the following messages sent by **{member.display_name}** in the last 30 minutes. "
-            f"Determine if their 'cortisol levels' (stress, aggression, shouting, toxicity) are elevated.\n"
-            f"Provide a concise, witty, scientific-style diagnostic report.\n\n"
-            f"MESSAGES:\n{history_text}"
+            f"DIAGNOSTIC DATA: Messages from **{member.display_name}**.\n\n"
+            f"INSTRUCTIONS:\n"
+            f"1. Analyze if 'cortisol' (aggression, toxicity, shouting, stress) is high.\n"
+            f"2. Keep the report extremely short and concise.\n"
+            f"3. Use themed emojis for every heading.\n"
+            f"4. Do NOT overdo the joke; be blunt and clinical.\n"
+            f"5. Do NOT provide a recommended treatment.\n\n"
+            f"TRANSCRIPT:\n{history_text}"
         )
         await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}")
 
