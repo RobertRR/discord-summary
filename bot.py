@@ -11,11 +11,10 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, time
 
 # --- VERSION TRACKING ---
-# v5.0.6 - TLDW Polish & Cortisol Cost-Save 💸
-# 1. Switched !cortisolcheck from Pro model to Flash chain to save credits.
-# 2. Refined !tldw prompt to strictly use bullet points for summary, assessment, and sources.
-# 3. Moved model/usage info to the bottom of AI responses for all commands.
-BOT_VERSION = "v5.0.6 - TLDW Polish 💸"
+# v5.0.7 - Prompt Refinement 📝
+# 1. Refined !tldr and !arguments prompts to strictly use bullet points for summaries.
+# 2. Reordered prompt instructions to ensure mogging results appear after the content.
+BOT_VERSION = "v5.0.7 - Prompt Refinement 📝"
 
 # --- GLOBAL START TIME ---
 START_TIME = datetime.now()
@@ -149,7 +148,6 @@ async def fetch_remote_hash():
     }
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            # Timestamp parameter serves as an additional cache-buster.
             async with session.get(f"{GITHUB_RAW_URL}?t={datetime.now().timestamp()}") as resp:
                 if resp.status == 200:
                     content = await resp.read()
@@ -259,13 +257,13 @@ async def help_command(ctx):
         "**`!version`**\n"
         "Shows build version, uptime, and changelog.\n\n"
         "**`!tldr [amount/today]`**\n"
-        "Summaries + Cortisol Spike detection.\n\n"
+        "Bullet-point summaries + Cortisol detection.\n\n"
         "**`!tldw`**\n"
-        "**(Reply Required)** Summarizes and fact-checks a YouTube video link.\n\n"
+        "**(Reply Required)** Summarizes and fact-checks YouTube videos.\n\n"
         "**`!huh`**\n"
         "**(Reply Required)** Explains content and fact-checks a single message.\n\n"
         "**`!arguments [amount/today]`**\n"
-        "Conflict Analysis and Mogg updates.\n\n"
+        "Conflict analysis with bullet-point evidence.\n\n"
         "**`!cortisolcheck @name`**\n"
         "Analyzes user aggression levels (Flash model).\n\n"
         "**`!moggboard`**\n"
@@ -336,7 +334,6 @@ async def cortisolcheck(ctx, member: discord.Member):
         if not transcript_list:
             return await ctx.send(f"⚠️ No message history found for **{member.display_name}**.")
         prompt = (f"Analyze messages from **{member.display_name}**. INSTRUCTIONS: 1. Detect cortisol/aggression. 2. Extremely short diagnostic. 3. Themed emojis. 4. No treatment advice.\nTRANSCRIPT:\n" + "\n".join(transcript_list))
-        # Use None for forced_model to default to standard MODEL_CHAIN
         await process_ai_request(ctx, prompt, f"Cortisol Diagnostic: {member.display_name}", forced_model=None)
 
 @bot.command(name="tldw")
@@ -479,7 +476,16 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
         if not response: return await ctx.send(f"🔄 Quota Error: `{target_models}` exhausted.")
         
         sections = response.text.split("---SPLIT---")
+        
+        # 1. Output content sections first
+        for s in sections:
+            content = s.strip()
+            if content and "WINNER:" not in content:
+                for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
+
+        # 2. Process Mogg Ledger data AFTER content is sent
         if update_stats:
+            # Search last section for the winner/loser pattern
             match = re.search(r"WINNER:\s*([^\s|]+)\s*\|\s*LOSER:\s*([^\s\n\r]+)", sections[-1], re.IGNORECASE)
             if match:
                 w, l = match.group(1).strip().rstrip('.,!'), match.group(2).strip().rstrip('.,!')
@@ -489,13 +495,8 @@ async def process_ai_request(ctx, prompt, title, update_stats=False, media_parts
                 m_data[s_id][w]["wins"] += 1; m_data[s_id][l]["losses"] += 1
                 save_json_data("mogg_stats.json", m_data)
                 await ctx.send(f"# 🏟️ MOGG LEDGER\n* **Winner:** {w} | **Loser:** {l}")
-        
-        for s in sections:
-            content = s.strip()
-            if content and "WINNER:" not in content:
-                for j in range(0, len(content), 1900): await ctx.send(content[j:j+1900])
 
-        # Provide usage/token cost info at the bottom for consistency across all commands
+        # 3. Final Footer
         footer = f"### {title} for {ctx.author.mention}\n> **Model:** `{used_model}`"
         if use_grounding:
             footer += " | 🛰️ `Search Grounding Active`"
@@ -508,7 +509,17 @@ async def tldr(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = (f"Summarize conversation grouped by name. Use '---SPLIT---' between sections.\n# 📝 SUMMARIES\nGrouped by User Display Name.\n# 📈 CORTISOL SPIKES\n# MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\nTRANSCRIPT:\n" + "\n".join(transcript))
+    prompt = (
+        "Summarize the conversation grouped by name using BULLET POINTS for every contribution. "
+        "Use '---SPLIT---' between major sections.\n"
+        "# 📝 SUMMARIES\nGrouped by User Display Name using bullet points.\n"
+        "# 📈 CORTISOL SPIKES\n"
+        "# MOGG DATA (INTERNAL)\n"
+        "DIRECTIONS: Adjudicate any arguments found in the transcript above. "
+        "The very last part of your response must be exactly in this format:\n"
+        "WINNER: [Name] | LOSER: [Name]\n\n"
+        "TRANSCRIPT:\n" + "\n".join(transcript)
+    )
     await process_ai_request(ctx, prompt, "Summary", update_stats=True)
 
 @bot.command(name="arguments")
@@ -518,7 +529,17 @@ async def arguments(ctx, *, args: str = "50"):
     except: pass
     transcript = await fetch_history(ctx, args)
     if not transcript: return await ctx.send("No messages found.")
-    prompt = (f"Analyze arguments. Use '---SPLIT---' between sections:\n1. # 📜 SUMMARY\n2. # 🔍 REVIEW\n3. # ⚖️ VERDICT\n4. MOGG DATA (INTERNAL)\nWINNER: [Name] | LOSER: [Name]\n\nTRANSCRIPT:\n" + "\n".join(transcript))
+    prompt = (
+        "Analyze the arguments in the transcript. Use BULLET POINTS for evidence and review sections. "
+        "Use '---SPLIT---' between sections:\n"
+        "1. # 📜 SUMMARY (Using bullet points)\n"
+        "2. # 🔍 REVIEW (Using bullet points)\n"
+        "3. # ⚖️ VERDICT\n"
+        "4. # MOGG DATA (INTERNAL)\n"
+        "The very last part of your response must be exactly in this format:\n"
+        "WINNER: [Name] | LOSER: [Name]\n\n"
+        "TRANSCRIPT:\n" + "\n".join(transcript)
+    )
     await process_ai_request(ctx, prompt, "Argument Analysis", update_stats=True)
 
 if DISCORD_TOKEN: bot.run(DISCORD_TOKEN)
