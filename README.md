@@ -52,7 +52,7 @@ Create a project folder (e.g., `/projects/discord-summary`) containing:
 * **`discordtoken.txt`**: Your Bot Token (one line).
 * **`keys.txt`**: Your Gemini API Keys (one per line).
 * **`admins.txt`**: Your Discord User ID (one per line).
-
+* **`update_channel.txt`**: The channel for update output.
 ---
 
 ## 🚀 Deployment
